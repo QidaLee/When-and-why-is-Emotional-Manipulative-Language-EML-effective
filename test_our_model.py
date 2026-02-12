@@ -186,7 +186,7 @@ def main():
         # df['prediction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # Save results
-        output_path = './our_data/agreement_with_our_predictions.csv'
+        output_path = './output_data/agreement_with_our_predictions.csv'
         df.to_csv(output_path, index = False)
         logger.info(f"Predictions saved to: {output_path}")
 
