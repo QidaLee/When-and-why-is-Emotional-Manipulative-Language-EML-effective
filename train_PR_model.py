@@ -24,7 +24,7 @@ print("Loading Data")
 print("=" * 50)
 
 # TODO: Change to your actual file name
-df = pd.read_csv('./data/300_dialog_with_result.csv')
+df = pd.read_csv('./data/Persuasion_For_Good/300_dialog_with_result.csv')
 
 print(f"Data shape: {df.shape}")
 print(f"Columns: {df.columns.tolist()}")

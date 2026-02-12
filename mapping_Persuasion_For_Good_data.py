@@ -5,7 +5,7 @@ from pathlib import Path
 # ============================================
 # 1. Load data
 # ============================================
-file_path = Path("./data/300_dialog.xlsx")
+file_path = Path("./data/Persuasion_For_Good/300_dialog.xlsx")
 df = pd.read_excel(file_path)
 
 print(f"Original data shape: {df.shape}")
