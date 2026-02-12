@@ -77,10 +77,10 @@ def main():
     df['confidence'] = [max(probs) for probs in probabilities]
 
     # Compare with existing annotations if available
-    if 'labels_from_GPT' in df.columns:
-        df['same_as_gpt'] = df['labels_from_GPT'] == df['prediction_label']
-        gpt_agreement = df['same_as_gpt'].mean()
-        print(f"\nAgreement with GPT: {gpt_agreement:.2%}")
+    # if 'labels_from_GPT' in df.columns:
+    #     df['same_as_gpt'] = df['labels_from_GPT'] == df['prediction_label']
+    #     gpt_agreement = df['same_as_gpt'].mean()
+    #     print(f"\nAgreement with GPT: {gpt_agreement:.2%}")
 
     if 'lables_from_our_CaBert' in df.columns:
         df['same_as_cabert'] = df['lables_from_our_CaBert'] == df['prediction_label']
