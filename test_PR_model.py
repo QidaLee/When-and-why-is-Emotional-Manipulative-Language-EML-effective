@@ -13,7 +13,7 @@ import sys
 def setup_logging():
     """Setup logging configuration"""
     # Create log directory if not exists
-    log_dir = './log'
+    log_dir = './log/PR_model_test'
     os.makedirs(log_dir, exist_ok = True)
 
     # Create log filename with timestamp
@@ -84,7 +84,7 @@ def predict_texts(texts, model, tokenizer, id2label, logger, batch_size=16):
     return predictions, probabilities
 
 
-def save_results_to_log(df, logger, log_dir='./log'):
+def save_results_to_log(df, logger, log_dir='./log/PR_model_test'):
     """Save detailed results to separate log file"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -102,7 +102,7 @@ def save_results_to_log(df, logger, log_dir='./log'):
         f.write("=" * 60 + "\n\n")
 
         f.write("Model Information:\n")
-        f.write(f"  Model path: ./persuasion_model\n")
+        f.write(f"  Model path: ./models/PR_model\n")
         f.write(f"  Device: {device}\n")
         f.write(f"  Number of classes: {len(df['prediction_label'].unique())}\n\n")
 
@@ -139,14 +139,14 @@ def main():
 
     try:
         # Load data
-        data_path = './our_data/agreement_annotations_with_labels.csv'
+        data_path = './data/our_data/agreement_annotations.csv'
         logger.info(f"Loading data from: {data_path}")
         df = pd.read_csv(data_path)
         logger.info(f"Loaded {len(df)} data samples")
         logger.info(f"Columns: {df.columns.tolist()}")
 
         # Load trained model
-        model_path = './persuasion_model'
+        model_path = './models/PR_model'
         logger.info(f"Loading model from: {model_path}")
 
         if not os.path.exists(model_path):
@@ -186,7 +186,7 @@ def main():
         # df['prediction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         # Save results
-        output_path = './output_data/agreement_with_our_predictions.csv'
+        output_path = './output_data/agreement_with_PR_labels.csv'
         df.to_csv(output_path, index = False)
         logger.info(f"Predictions saved to: {output_path}")
 

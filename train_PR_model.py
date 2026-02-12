@@ -158,7 +158,7 @@ class WeightedTrainer(Trainer):
 # 11. Training Arguments
 # ==================================================
 training_args = TrainingArguments(
-    output_dir = './results',
+    output_dir = './results/PR_model',
     num_train_epochs = 15,
     learning_rate = 1e-5,
     per_device_train_batch_size = 8,
@@ -237,7 +237,7 @@ print(f"\nEvaluation results: {eval_results}")
 # ==================================================
 # 16. Save Model
 # ==================================================
-model_save_path = './persuasion_model'
+model_save_path = './models/PR_model'
 trainer.save_model(model_save_path)
 tokenizer.save_pretrained(model_save_path)
 print(f"\nModel saved to: {model_save_path}")
