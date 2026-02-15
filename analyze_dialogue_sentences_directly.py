@@ -111,56 +111,6 @@ print(df_analysis[core_cols].head(3))
 
 print(f"\nData preparation complete! Total {len(df_analysis)} dialogue entries available for subsequent analysis.")
 
-# 第一部分：描述性统计分析
-fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-fig.suptitle('对话数据核心变量描述性统计', fontsize=16, fontweight='bold')
-
-# 1. 操纵对话分布
-ax1 = axes[0, 0]
-manip_data = df_analysis['is_manipulation'].value_counts().sort_index()
-labels_manip = ['非操纵对话 (0)', '操纵对话 (1)']
-colors1 = ['#3498db', '#e74c3c']
-wedges, texts, autotexts = ax1.pie(manip_data.values, labels=labels_manip, colors=colors1,
-                                   autopct='%1.2f%%', startangle=90)
-ax1.set_title('操纵对话vs非操纵对话分布\n(共2370条)', fontweight='bold', pad=20)
-
-# 2. 对话行为类型分布
-ax2 = axes[0, 1]
-dialogue_data = df_analysis['dialogue_act'].value_counts()
-colors2 = ['#2ecc71', '#f39c12', '#9b59b6']
-bars = ax2.bar(dialogue_data.index, dialogue_data.values, color=colors2, alpha=0.8)
-ax2.set_title('对话行为类型分布', fontweight='bold', pad=20)
-ax2.set_ylabel('对话数量')
-# 添加数值标签
-for bar in bars:
-    height = bar.get_height()
-    ax2.text(bar.get_x() + bar.get_width()/2., height + 20,
-             f'{int(height)}\n({height/len(df_analysis)*100:.2f}%)',
-             ha='center', va='bottom', fontweight='bold')
-
-# 3. 情感操纵结果分布
-ax3 = axes[1, 0]
-emotion_data = df_analysis['emotional_result'].value_counts()
-colors3 = ['#3498db', '#e74c3c', '#f39c12']
-bars2 = ax3.bar(emotion_data.index, emotion_data.values, color=colors3, alpha=0.8)
-ax3.set_title('情感操纵结果分布', fontweight='bold', pad=20)
-ax3.set_ylabel('对话数量')
-# 添加数值标签
-for bar in bars2:
-    height = bar.get_height()
-    ax3.text(bar.get_x() + bar.get_width()/2., height + 20,
-             f'{int(height)}\n({height/len(df_analysis)*100:.2f}%)',
-             ha='center', va='bottom', fontweight='bold')
-
-
-plt.tight_layout()
-plt.savefig('./results/descriptive_analysis.png', dpi=300, bbox_inches='tight')
-plt.close()
-
-
-
-
-
 # Part 1: Descriptive Statistical Analysis
 fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 fig.suptitle('Descriptive Statistics of Core Dialogue Variables', fontsize=16, fontweight='bold')
@@ -205,3 +155,48 @@ for bar in bars2:
 plt.tight_layout()
 plt.savefig('./results/descriptive_analysis.png', dpi=300, bbox_inches='tight')
 plt.close()
+
+# Output statistical results table
+print("="*80)
+print("DESCRIPTIVE STATISTICS OF CORE VARIABLES")
+print("="*80)
+
+# 1. Basic statistics summary
+print("\n1. Basic Data Overview")
+print("-" * 40)
+stats_summary = pd.DataFrame({
+    'Variable': ['Total dialogues', 'Manipulative dialogues', 'Non-manipulative dialogues'],
+    'Count': [len(df_analysis),
+            len(df_analysis[df_analysis['is_manipulation'] == 1]),
+            len(df_analysis[df_analysis['is_manipulation'] == 0])],
+    'Percentage(%)': [100.00,
+              len(df_analysis[df_analysis['is_manipulation'] == 1])/len(df_analysis)*100,
+              len(df_analysis[df_analysis['is_manipulation'] == 0])/len(df_analysis)*100]
+})
+print(stats_summary.round(2))
+
+# 2. Detailed distribution by dimension
+print("\n2. Detailed Distribution by Dimension")
+print("-" * 40)
+
+# Dialogue act type distribution
+print("\nDialogue Act Type Distribution:")
+dialogue_counts = df_analysis['dialogue_act'].value_counts()
+dialogue_stats = pd.DataFrame({
+    'Dialogue Act Type': dialogue_counts.index,
+    'Count': dialogue_counts.values,
+    'Percentage(%)': (dialogue_counts.values / len(df_analysis) * 100).round(2)
+})
+print(dialogue_stats)
+
+# Emotional manipulation result distribution
+print("\nEmotional Manipulation Result Distribution:")
+emotion_counts = df_analysis['emotional_result'].value_counts()
+emotion_stats = pd.DataFrame({
+    'Emotional Result': emotion_counts.index,
+    'Count': emotion_counts.values,
+    'Percentage(%)': (emotion_counts.values / len(df_analysis) * 100).round(2)
+})
+print(emotion_stats)
+
+print(f"\nDescriptive statistics chart saved to: ./results/descriptive_analysis.png")
