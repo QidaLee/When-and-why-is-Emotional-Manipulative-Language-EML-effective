@@ -22,7 +22,7 @@ class Config:
         dic_path_with_tokens = "data/sgd_dialogue/intent2id_multi_with_tokens.pkl"
         slot_path = "data/sgd_dialogue/slot2id.pkl"
 
-    model_path = None if not retrain else "checkpoints/best_{}_{}.pth".format(
+    model_path = None if not retrain else "models/CaBERT_DA/checkpoints/best_{}_{}.pth".format(
         datatype, data_mode)
 
     maxlen = 60
