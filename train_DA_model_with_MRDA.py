@@ -13,45 +13,64 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer
 from tqdm import tqdm
-import joblib  # For model serialization
+import joblib
 
 # -------------------------- 1. Initialize NLTK Resources --------------------------
-# Download required NLTK resources (quiet mode for first run)
 nltk.download('stopwords', quiet = True)
 nltk.download('punkt_tab', quiet = True)
+stop_words = set(stopwords.words('english'))
+stemmer = PorterStemmer()
 
-# Initialize NLP tools
-stop_words = set(stopwords.words('english'))  # English stopwords collection
-stemmer = PorterStemmer()  # Porter Stemmer for word normalization
-
-# -------------------------- 2. Configuration Parameters --------------------------
-# Dataset configuration
-DATA_DIR = "./data/MRDA"  # MRDA dataset directory path
-LABEL_TYPE = "Full"  # Label hierarchy: Basic/General/Full
+# -------------------------- 2. Configuration (Added Core Switch Parameter) --------------------------
+DATA_DIR = "./data/MRDA"
+LABEL_TYPE = "Full"  # Basic/General/Full hierarchy for MRDA dialogue act labels
 SEED = 42  # Fixed random seed for reproducibility
 
-# Testing configuration
+# Core Switch: True = Load saved model, False = Retrain from scratch
+USE_SAVED_MODEL = True
+
+# Test/memory optimization configuration
 TEST_SMALL_BATCH = False  # Enable for quick testing with limited samples
 BATCH_SIZE = 1000  # Number of samples for small batch testing
+TFIDF_MAX_FEATURES = 1000  # Reduced from 3000 to lower memory usage
+SVD_COMPONENTS = 200  # Reduced from 500 to speed up dimensionality reduction
+CV_FOLDS = 2  # Reduced from 3 to accelerate grid search
 
-# Feature engineering configuration
-TFIDF_MAX_FEATURES = 3000  # Max TF-IDF features (reduced for Full hierarchy efficiency)
-SVD_COMPONENTS = 500  # SVD dimensionality reduction target (500 dimensions)
-CV_FOLDS = 3  # Number of cross-validation folds
-
-# Model saving configuration (UPDATED: Save to ./models/Logistic_DA_MRDA)
+# Model saving paths (as requested: ./models/Logistic_DA_MRDA)
 MODEL_BASE_DIR = "./models"
 MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, "Logistic_DA_MRDA")
-# Unique filenames with label type identifier
 MODEL_FILENAME = f"logistic_da_mrda_{LABEL_TYPE.lower()}.pkl"
 TFIDF_FILENAME = f"tfidf_mrda_{LABEL_TYPE.lower()}.pkl"
 SVD_FILENAME = f"svd_mrda_{LABEL_TYPE.lower()}.pkl"
+os.makedirs(MODEL_SAVE_DIR, exist_ok = True)  # Create directory if not exists
 
-# Create model directory if it doesn't exist
-os.makedirs(MODEL_SAVE_DIR, exist_ok = True)
+# Full file paths for model loading/saving
+MODEL_PATH = os.path.join(MODEL_SAVE_DIR, MODEL_FILENAME)
+TFIDF_PATH = os.path.join(MODEL_SAVE_DIR, TFIDF_FILENAME)
+SVD_PATH = os.path.join(MODEL_SAVE_DIR, SVD_FILENAME)
 
 
-# -------------------------- 3. Data Loading and Parsing Function --------------------------
+# -------------------------- 3. Model Loading/Training Control Logic (Added) --------------------------
+def load_saved_models():
+    """Load pre-saved logistic regression model, TF-IDF vectorizer, and SVD transformer"""
+    try:
+        print(f"Loading saved model from {MODEL_SAVE_DIR}...")
+        model = joblib.load(MODEL_PATH)
+        tfidf = joblib.load(TFIDF_PATH)
+        svd = joblib.load(SVD_PATH)
+        print("Saved models loaded successfully!")
+        return model, tfidf, svd
+    except FileNotFoundError as e:
+        print(f"Saved model files not found: {e}")
+        print("Will start new training instead...")
+        return None, None, None
+    except Exception as e:
+        print(f"Failed to load saved models: {e}")
+        print("Will start new training instead...")
+        return None, None, None
+
+
+# -------------------------- 4. Data Loading --------------------------
 def load_mrda_data(file_path, label_type="Basic"):
     """
     Load and parse MRDA dataset files into structured text and label lists.
@@ -66,50 +85,45 @@ def load_mrda_data(file_path, label_type="Basic"):
     texts = []
     labels = []
     # Map label type to column index in MRDA pipe-separated format
-    label_index_map = {"Basic": 2, "General": 3, "Full": 4}
-    label_idx = label_index_map[label_type]
+    label_idx = {"Basic": 2, "General": 3, "Full": 4}[label_type]
 
     print(f"Starting to load {os.path.basename(file_path)}...")
     start_time = time.time()
-
-    # Read file with progress bar
     with open(file_path, "r", encoding = "utf-8") as f:
         for line in tqdm(f, desc = f"Loading {os.path.basename(file_path)}"):
             line = line.strip()
-            if not line:  # Skip empty lines
+            # Skip empty lines or lines with invalid format (not 5 fields separated by |)
+            if not line or len(line.split("|")) != 5:
                 continue
-
             parts = line.split("|")
-            if len(parts) != 5:  # Validate MRDA format (5 fields separated by |)
-                continue
-
-            # Extract text and label from correct columns
-            text = parts[1].strip()
-            label = parts[label_idx].strip()
-
+            text = parts[1].strip()  # Extract utterance text
+            label = parts[label_idx].strip()  # Extract corresponding DA label
             texts.append(text)
             labels.append(label)
 
-    # Small batch testing - limit samples for quick validation
+    # Limit samples for small batch testing
     if TEST_SMALL_BATCH:
         texts = texts[:BATCH_SIZE]
         labels = labels[:BATCH_SIZE]
 
-    # Calculate loading statistics
     load_time = time.time() - start_time
     print(f"Loaded {os.path.basename(file_path)}: {len(texts)} texts, {len(labels)} labels (Time: {load_time:.2f}s)")
     print(f"Label distribution: {Counter(labels)}")
-
     return texts, labels
 
 
-# Load train/validation/test datasets
+# Load train/validation/test datasets (required for evaluation even when loading saved model)
 train_texts, train_labels = load_mrda_data(os.path.join(DATA_DIR, "train_set.txt"), LABEL_TYPE)
 val_texts, val_labels = load_mrda_data(os.path.join(DATA_DIR, "val_set.txt"), LABEL_TYPE)
 test_texts, test_labels = load_mrda_data(os.path.join(DATA_DIR, "test_set.txt"), LABEL_TYPE)
 
+# -------------------------- 关键修复1：全局定义y_test变量 --------------------------
+# Define target variables globally (available for both training and loading branches)
+y_train = train_labels
+y_val = val_labels
+y_test = test_labels  # 核心：把y_test提到全局，无论是否训练都能访问
 
-# -------------------------- 4. Text Preprocessing Pipeline --------------------------
+# -------------------------- 5. Text Preprocessing --------------------------
 def preprocess_text(text):
     """
     Complete text preprocessing pipeline for MRDA utterances:
@@ -126,230 +140,175 @@ def preprocess_text(text):
     Returns:
         str: Preprocessed and normalized text string
     """
-    # Convert to lowercase
-    text = text.lower()
-
-    # Remove special characters and numbers (keep only letters and spaces)
-    text = re.sub(r"[^a-zA-Z\s]", "", text)
-
-    # Tokenization
-    tokens = nltk.word_tokenize(text)
-
+    text = text.lower()  # Convert to lowercase
+    text = re.sub(r"[^a-zA-Z\s]", "", text)  # Remove special characters and numbers
+    tokens = nltk.word_tokenize(text)  # Tokenization
     # Filter stopwords, short tokens and apply stemming
-    processed_tokens = [
-        stemmer.stem(token)
-        for token in tokens
-        if token not in stop_words and len(token) > 1
-    ]
-
-    # Reconstruct preprocessed text
-    return " ".join(processed_tokens)
+    tokens = [stemmer.stem(token) for token in tokens if token not in stop_words and len(token) > 1]
+    return " ".join(tokens)  # Reconstruct preprocessed text
 
 
-# Apply preprocessing with progress tracking
+# Apply preprocessing (required for test set even when loading saved model)
 print("\nStarting text preprocessing...")
 start_time = time.time()
-
 train_texts_processed = [preprocess_text(t) for t in tqdm(train_texts, desc = "Preprocessing train set")]
 val_texts_processed = [preprocess_text(t) for t in tqdm(val_texts, desc = "Preprocessing val set")]
 test_texts_processed = [preprocess_text(t) for t in tqdm(test_texts, desc = "Preprocessing test set")]
-
 preprocess_time = time.time() - start_time
 print(f"Text preprocessing completed (Total Time: {preprocess_time:.2f}s)\n")
 
-# -------------------------- 5. TF-IDF Feature Extraction --------------------------
-print("Starting TF-IDF feature extraction...")
-start_time = time.time()
+# -------------------------- 6. Core Logic: Load Model or Train Model --------------------------
+best_model = None
+tfidf_vectorizer = None
+svd = None
 
-# Initialize TF-IDF vectorizer with memory constraints (optimized for Full hierarchy)
-tfidf_vectorizer = TfidfVectorizer(
-    max_features = TFIDF_MAX_FEATURES,  # Limit features to control memory usage
-    ngram_range = (1, 1)  # Use only unigrams for Full hierarchy efficiency
-)
+# Step 1: Attempt to load saved model if enabled
+if USE_SAVED_MODEL:
+    best_model, tfidf_vectorizer, svd = load_saved_models()
 
-# Fit TF-IDF on training data (learn vocabulary) and transform all datasets
-X_train = tfidf_vectorizer.fit_transform(tqdm(train_texts_processed, desc = "Fitting TF-IDF on train set"))
-X_val = tfidf_vectorizer.transform(tqdm(val_texts_processed, desc = "Transforming val set"))
-X_test = tfidf_vectorizer.transform(tqdm(test_texts_processed, desc = "Transforming test set"))
+# Step 2: Execute full training pipeline if model loading failed or retraining is enabled
+if best_model is None or tfidf_vectorizer is None or svd is None:
+    # -------------------------- 6.1 TF-IDF Feature Extraction --------------------------
+    print("Starting TF-IDF feature extraction...")
+    start_time = time.time()
+    tfidf_vectorizer = TfidfVectorizer(
+        max_features = TFIDF_MAX_FEATURES,
+        ngram_range = (1, 1)  # Use only unigrams for memory efficiency
+    )
+    # Fit TF-IDF on training data and transform all datasets
+    X_train = tfidf_vectorizer.fit_transform(tqdm(train_texts_processed, desc = "Fitting TF-IDF on train set"))
+    X_val = tfidf_vectorizer.transform(tqdm(val_texts_processed, desc = "Transforming val set"))
+    X_test = tfidf_vectorizer.transform(tqdm(test_texts_processed, desc = "Transforming test set"))
 
-tfidf_time = time.time() - start_time
-print(f"TF-IDF feature extraction completed (Time: {tfidf_time:.2f}s)")
-print(f"TF-IDF feature dimensions: Train={X_train.shape}, Val={X_val.shape}, Test={X_test.shape}\n")
+    tfidf_time = time.time() - start_time
+    print(f"TF-IDF feature extraction completed (Time: {tfidf_time:.2f}s)")
+    print(f"TF-IDF dimensions: Train={X_train.shape}, Val={X_val.shape}, Test={X_test.shape}\n")
 
-# Assign labels to target variables
-y_train = train_labels
-y_val = val_labels
-y_test = test_labels
+    # -------------------------- 关键修复2：删除训练分支中重复的y_test赋值（可选） --------------------------
+    # 注释/删除这部分重复赋值，因为已经在全局定义过了
+    # y_train = train_labels
+    # y_val = val_labels
+    # y_test = test_labels
 
-# -------------------------- 6. Dimensionality Reduction with Truncated SVD --------------------------
-print("Starting dimensionality reduction with Truncated SVD...")
-start_time = time.time()
+    # -------------------------- 6.2 SVD Dimensionality Reduction --------------------------
+    print("Starting dimensionality reduction with Truncated SVD...")
+    start_time = time.time()
+    svd = TruncatedSVD(
+        n_components = SVD_COMPONENTS,
+        random_state = SEED  # Reproducible dimensionality reduction
+    )
+    # Fit SVD only on training data (prevent data leakage) and transform all datasets
+    X_train_reduced = svd.fit_transform(X_train)
+    X_val_reduced = svd.transform(X_val)
+    X_test_reduced = svd.transform(X_test)
 
-# Initialize SVD (fixed integer components - compatible with all sklearn versions)
-svd = TruncatedSVD(
-    n_components = SVD_COMPONENTS,
-    random_state = SEED  # Reproducible dimensionality reduction
-)
+    svd_time = time.time() - start_time
+    print(f"SVD completed (Time: {svd_time:.2f}s)")
+    print(f"Reduced dimensions: Train={X_train_reduced.shape}, Val={X_val_reduced.shape}, Test={X_test_reduced.shape}")
+    print(f"Explained variance ratio (total): {svd.explained_variance_ratio_.sum():.4f}\n")
 
-# Fit SVD only on training data (prevent data leakage) and transform all datasets
-X_train_reduced = svd.fit_transform(X_train)
-X_val_reduced = svd.transform(X_val)
-X_test_reduced = svd.transform(X_test)
+    # -------------------------- 6.3 Model Training --------------------------
+    print("Starting Logistic Regression training with grid search...")
+    start_time = time.time()
 
-svd_time = time.time() - start_time
-print(f"SVD dimensionality reduction completed (Time: {svd_time:.2f}s)")
-print(
-    f"Reduced feature dimensions: Train={X_train_reduced.shape}, Val={X_val_reduced.shape}, Test={X_test_reduced.shape}")
-print(f"Total explained variance ratio: {svd.explained_variance_ratio_.sum():.4f}\n")
+    # Initialize Logistic Regression (optimized for Full hierarchy multi-class classification)
+    logistic_model = LogisticRegression(
+        random_state = SEED,
+        max_iter = 500,  # Increased iterations for convergence in multi-class scenario
+        class_weight = "balanced",  # Address class imbalance in Full hierarchy
+        solver = "saga"  # Optimized solver for multi-class classification with L1/L2 regularization
+    )
 
-# -------------------------- 7. Logistic Regression Model Training with Grid Search --------------------------
-print("Starting Logistic Regression training with grid search...")
-start_time = time.time()
+    # Simplified grid search parameters (reduce computation time)
+    param_grid = {
+        "C": [1.0]  # Regularization strength (single value for faster training)
+    }
 
-# Initialize Logistic Regression (optimized for Full hierarchy multi-class classification)
-logistic_model = LogisticRegression(
-    random_state = SEED,
-    max_iter = 500,  # Reduced iterations for Full hierarchy efficiency (prevents long training)
-    class_weight = "balanced",  # Critical: Address class imbalance in Full hierarchy
-    solver = "saga"  # Optimized solver for multi-class classification with L1/L2 regularization
-)
+    # Initialize Grid Search with cross-validation
+    grid_search = GridSearchCV(
+        estimator = logistic_model,
+        param_grid = param_grid,
+        cv = CV_FOLDS,
+        scoring = "f1_macro",  # Appropriate metric for imbalanced multi-class classification
+        verbose = 1,  # Reduced verbosity to save memory
+        n_jobs = 1  # Single thread to prevent memory issues with old sklearn versions
+    )
 
-# Grid search parameters (simplified for Full hierarchy efficiency)
-param_grid = {
-    "C": [1.0]  # Regularization strength (simplified to single value for faster training)
-}
+    print(f"Grid search started (CV={CV_FOLDS}, parameters={len(param_grid['C'])} combinations)...")
+    grid_search.fit(X_train_reduced, y_train)
 
-# Initialize Grid Search with cross-validation
-grid_search = GridSearchCV(
-    estimator = logistic_model,
-    param_grid = param_grid,
-    cv = CV_FOLDS,
-    scoring = "f1_macro",  # Appropriate metric for imbalanced multi-class classification
-    verbose = 2,
-    n_jobs = 1  # Single thread to prevent memory issues with Full hierarchy
-)
+    train_time = time.time() - start_time
+    print(f"\nModel training completed (Time: {train_time:.2f}s)")
+    print(f"Best hyperparameters: {grid_search.best_params_}")
+    print(f"Best cross-validation F1-macro score: {grid_search.best_score_:.4f}")
+    best_model = grid_search.best_estimator_
 
-# Calculate total parameter combinations for progress tracking
-total_combinations = len(param_grid["C"])
-print(f"Grid search initialized (CV={CV_FOLDS}, parameters={total_combinations} combinations)...")
+    # -------------------------- 6.4 Save Model --------------------------
+    print(f"\nSaving model to {MODEL_SAVE_DIR}...")
+    joblib.dump(best_model, MODEL_PATH)
+    joblib.dump(tfidf_vectorizer, TFIDF_PATH)
+    joblib.dump(svd, SVD_PATH)
+    print("Model saved successfully!")
 
-# Train model on reduced features
-grid_search.fit(X_train_reduced, y_train)
+    # Assign reduced test set features for evaluation
+    X_test_reduced = svd.transform(tfidf_vectorizer.transform(test_texts_processed))
+else:
+    # Regenerate test set features with saved TF-IDF/SVD (ensure consistency)
+    print("\nGenerating test set features with saved TF-IDF/SVD...")
+    X_test_tfidf = tfidf_vectorizer.transform(test_texts_processed)
+    X_test_reduced = svd.transform(X_test_tfidf)
+    print(f"Test set reduced dimensions: {X_test_reduced.shape}")
 
-# Calculate training time
-train_time = time.time() - start_time
-print(f"\nModel training completed (Total Time: {train_time:.2f}s)")
-print(f"Best hyperparameters: {grid_search.best_params_}")
-print(f"Best cross-validation F1-macro score: {grid_search.best_score_:.4f}")
-
-# Extract best model from grid search
-best_model = grid_search.best_estimator_
-
-# -------------------------- 8. Save Trained Model and Transformers --------------------------
-print(f"\nSaving trained model and transformers to {MODEL_SAVE_DIR}...")
-
-# Save the best logistic regression model
-model_save_path = os.path.join(MODEL_SAVE_DIR, MODEL_FILENAME)
-joblib.dump(best_model, model_save_path)
-print(f"✅ Trained model saved to: {model_save_path}")
-
-# Save TF-IDF vectorizer (required for future predictions)
-tfidf_save_path = os.path.join(MODEL_SAVE_DIR, TFIDF_FILENAME)
-joblib.dump(tfidf_vectorizer, tfidf_save_path)
-print(f"✅ TF-IDF vectorizer saved to: {tfidf_save_path}")
-
-# Save SVD transformer (required for future predictions)
-svd_save_path = os.path.join(MODEL_SAVE_DIR, SVD_FILENAME)
-joblib.dump(svd, svd_save_path)
-print(f"✅ SVD transformer saved to: {svd_save_path}")
-
-# -------------------------- 9. Model Evaluation on Test Set --------------------------
-print("\nStarting model evaluation on test set...")
+# -------------------------- 7. Model Evaluation --------------------------
+print("\nStarting test set evaluation...")
 start_time = time.time()
 
 # Generate predictions on test set (using reduced features)
-y_test_pred = best_model.predict(tqdm(X_test_reduced, desc = "Predicting on test set"))
-
+y_test_pred = best_model.predict(X_test_reduced)
 eval_time = time.time() - start_time
+
 print(f"\n===== Test Set Evaluation Results (Time: {eval_time:.2f}s) =====")
 print(f"Overall Accuracy: {accuracy_score(y_test, y_test_pred):.4f}")
 
-# Print detailed classification report
+# Print detailed classification report (zero_division=0 to avoid errors with rare labels)
 print("\nClassification Report (Precision/Recall/F1-Score):")
 print(classification_report(y_test, y_test_pred, zero_division = 0))
 
-# Generate and print confusion matrix
-conf_matrix = confusion_matrix(y_test, y_test_pred)
-# Get sorted unique labels for consistent matrix formatting
+# Generate and print confusion matrix (show top 10 labels only to avoid excessive output)
+cm = confusion_matrix(y_test, y_test_pred)
 unique_labels = sorted(Counter(y_test).keys())
-conf_matrix_df = pd.DataFrame(
-    conf_matrix,
-    index = unique_labels,
-    columns = unique_labels
-)
-print("\nConfusion Matrix:")
-print(conf_matrix_df)
+cm_df = pd.DataFrame(cm[:10, :10], index = unique_labels[:10], columns = unique_labels[:10])
+print("\nConfusion Matrix (Top 10 Labels):")
+print(cm_df)
 
 
-# -------------------------- 10. Prediction Function for New Utterances --------------------------
-def predict_dialogue_act(text, model, tfidf, svd, preprocess_func):
+# -------------------------- 8. Prediction Function --------------------------
+def predict_dialogue_act(text, model, tfidf, svd):
     """
-    Predict dialogue act label for new/ unseen utterance text.
+    Predict dialogue act label for new/unseen utterance text using saved model.
 
     Args:
         text (str): Raw input utterance text
         model: Trained Logistic Regression model
         tfidf: Fitted TF-IDF vectorizer
         svd: Fitted Truncated SVD transformer
-        preprocess_func: Text preprocessing function
 
     Returns:
         str: Predicted dialogue act label
     """
-    # Complete preprocessing pipeline
-    processed_text = preprocess_func(text)
-
-    # Transform text to TF-IDF features
-    text_tfidf = tfidf.transform([processed_text])
-
-    # Apply SVD dimensionality reduction
-    text_reduced = svd.transform(text_tfidf)
-
-    # Predict dialogue act label
-    predicted_label = model.predict(text_reduced)[0]
-
-    return predicted_label
+    processed_text = preprocess_text(text)  # Apply same preprocessing as training
+    tfidf_vec = tfidf.transform([processed_text])  # Convert text to TF-IDF features
+    svd_vec = svd.transform(tfidf_vec)  # Apply dimensionality reduction
+    return model.predict(svd_vec)[0]  # Predict and return label
 
 
-# -------------------------- 11. Example Predictions --------------------------
-# Test prediction with sample utterances
+# Example predictions with sample utterances
 test_utterances = [
-    "Can you share the project documentation with me?",
-    "The deadline for the report is tomorrow afternoon.",
-    "Alright, let's discuss the next agenda item now."
+    "Can you share the project docs?",
+    "The deadline is tomorrow.",
+    "Let's move to the next topic."
 ]
-
 print("\n===== Example Predictions =====")
 for utterance in test_utterances:
-    pred_label = predict_dialogue_act(utterance, best_model, tfidf_vectorizer, svd, preprocess_text)
-    print(f"Utterance: {utterance}")
-    print(f"Predicted DA Label: {pred_label}\n")
-
-
-# -------------------------- 12. Model Loading Function (for future use) --------------------------
-def load_trained_models():
-    """
-    Load saved Logistic Regression model, TF-IDF vectorizer and SVD transformer.
-
-    Returns:
-        tuple: (model, tfidf, svd) - Loaded model and transformers
-    """
-    model = joblib.load(os.path.join(MODEL_SAVE_DIR, MODEL_FILENAME))
-    tfidf = joblib.load(os.path.join(MODEL_SAVE_DIR, TFIDF_FILENAME))
-    svd = joblib.load(os.path.join(MODEL_SAVE_DIR, SVD_FILENAME))
-    return model, tfidf, svd
-
-# Example usage (commented out - uncomment to test loading)
-# loaded_model, loaded_tfidf, loaded_svd = load_trained_models()
-# sample_prediction = predict_dialogue_act("What time is the meeting?", loaded_model, loaded_tfidf, loaded_svd, preprocess_text)
-# print(f"Loaded model prediction: {sample_prediction}")
+    predicted_label = predict_dialogue_act(utterance, best_model, tfidf_vectorizer, svd)
+    print(f"Utterance: {utterance}\nPredicted DA Label: {predicted_label}\n")
