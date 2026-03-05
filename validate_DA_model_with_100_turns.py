@@ -7,21 +7,21 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import joblib
 from tqdm import tqdm
 
-# -------------------------- 1. 全局配置（和训练脚本完全一致） --------------------------
+# -------------------------- 1. 全局配置（适配你的实际数据） --------------------------
 MODEL_TYPE = "bert-base-uncased"
 LABEL_TYPE = "General"
 MAX_SEQ_LENGTH = 64
 
-# 数据路径配置
+# 数据路径配置（修改为你的实际路径）
 DATA_DIR = "data/Persuasion_For_Good"
-NEW_DATA_PATH = os.path.join(DATA_DIR, "300_dialog.xlsx")
+NEW_DATA_PATH = os.path.join(DATA_DIR, "100_sample_turns_data_with_manual_label.xlsx")
 
 # 输出路径配置（改为output_data文件夹）
 OUTPUT_DIR = "output_data"
 os.makedirs(OUTPUT_DIR, exist_ok = True)
-OUTPUT_PATH = os.path.join(OUTPUT_DIR, "300_dialog_with_DA.csv")
+OUTPUT_PATH = os.path.join(OUTPUT_DIR, "100_sample_with_DA.csv")
 
-# 模型存储路径
+# 模型存储路径（你确认模型文件已存在）
 MODEL_BASE_DIR = "./models"
 MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, f"{MODEL_TYPE.replace('/', '_')}_DA_MRDA_{LABEL_TYPE.lower()}")
 LABEL_ENCODER_PATH = os.path.join(MODEL_SAVE_DIR, "label_encoder.pkl")
@@ -67,7 +67,7 @@ def load_trained_model():
     return model, tokenizer, label_encoder
 
 
-# -------------------------- 3. 加载300_dialog.xlsx数据（修复strip()错误） --------------------------
+# -------------------------- 3. 加载数据（适配Sentence列） --------------------------
 def load_persuasion_data(file_path):
     print(f"\nLoading Data from {file_path}")
     start_time = time.time()
@@ -75,16 +75,15 @@ def load_persuasion_data(file_path):
     # 读取Excel文件
     df = pd.read_excel(file_path)
 
-    # 检查Unit列
-    if "Unit" not in df.columns:
-        raise ValueError(f"'Unit' column not found in Excel! Columns available: {list(df.columns)}")
+    # 检查Sentence列（替换原Unit列）
+    if "Sentence" not in df.columns:
+        raise ValueError(f"'Sentence' column not found in Excel! Columns available: {list(df.columns)}")
 
-    # 修复：使用apply+lambda对每个元素执行strip()，而非直接对Series调用strip()
     # 过滤有效文本（非空 + 去除空格后非空字符串）
-    df["Unit_str"] = df["Unit"].astype(str).apply(lambda x: x.strip())  # 对每个文本去空格
-    valid_mask = df["Unit"].notna() & (df["Unit_str"] != "")  # 过滤条件
-    raw_df = df[valid_mask].copy().drop(columns = ["Unit_str"])  # 删除临时列
-    texts = raw_df["Unit"].astype(str).apply(lambda x: x.strip()).tolist()  # 文本去空格后提取
+    df["Sentence_str"] = df["Sentence"].astype(str).apply(lambda x: x.strip())  # 对每个文本去空格
+    valid_mask = df["Sentence"].notna() & (df["Sentence_str"] != "")  # 过滤条件
+    raw_df = df[valid_mask].copy().drop(columns = ["Sentence_str"])  # 删除临时列
+    texts = raw_df["Sentence"].astype(str).apply(lambda x: x.strip()).tolist()  # 文本去空格后提取
 
     load_time = time.time() - start_time
     print(
@@ -151,7 +150,7 @@ def save_labeled_results(raw_df, pred_labels, output_path):
     # 输出统计信息
     print(f"Results Saved Successfully!")
     print(f"\nResult Sample (First 5 Rows)")
-    print(result_df[["Unit", f"DA_label_{LABEL_TYPE}"]].head())
+    print(result_df[["Sentence", f"DA_label_{LABEL_TYPE}"]].head())
 
     print(f"\nDA Label Distribution")
     label_count = result_df[f"DA_label_{LABEL_TYPE}"].value_counts()
@@ -166,7 +165,7 @@ def main():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR, exist_ok = True)
         print(f"Created data directory: {DATA_DIR}")
-        raise FileNotFoundError(f"Please put '300_dialog.xlsx' into {DATA_DIR} first!")
+        raise FileNotFoundError(f"Please put '100_sample_turns_data_with_manual_label.xlsx' into {DATA_DIR} first!")
 
     # 检查模型目录
     if not os.path.exists(MODEL_SAVE_DIR):
