@@ -80,7 +80,7 @@ df_merged_final = df_merged_sorted.reset_index(drop = True)
 df_merged_final.index.name = 'index'
 df_merged_final = df_merged_final.reset_index()
 
-# 6. 随机选择50个turn（共100行）
+# 6. 随机选择100个turn（共200行）
 print("=== 随机抽样逻辑执行 ===")
 # 定义turn唯一标识
 df_merged_final['turn_unique_id'] = df_merged_final['Dialogue_ID'] + '_turn_' + df_merged_final['Turn'].astype(str)
@@ -92,8 +92,8 @@ complete_turns = turn_role_count[turn_role_count['Role'] == 2]['turn_unique_id']
 print(f"总turn数量：{len(turn_role_count)} 个")
 print(f"包含完整角色的turn数量：{len(complete_turns)} 个")
 
-# 随机选择50个turn
-selected_turns = random.sample(complete_turns, 50) if len(complete_turns) >= 50 else complete_turns
+# 随机选择100个turn
+selected_turns = random.sample(complete_turns, 100) if len(complete_turns) >= 100 else complete_turns
 
 # 筛选抽样数据
 df_sampled = df_merged_final[df_merged_final['turn_unique_id'].isin(selected_turns)].copy()
@@ -136,9 +136,9 @@ display_cols = ['index', 'Dialogue_ID', 'Role', 'Turn', 'neg', 'neu', 'pos']
 print(df_sampled[display_cols].head())
 
 # 8. 保存结果
-output_file = '100_sample_rows_data.xlsx'
+output_file = '100_sample_turns_data.xlsx'
 df_sampled.to_excel(output_file, index = False, engine = 'openpyxl')
 
-print(f"\n✅ 数据处理完成！文件已保存为：{output_file}")
+print(f"\n 数据处理完成！文件已保存为：{output_file}")
 print(f"最终数据行数：{len(df_sampled)} 行，列数：{len(df_sampled.columns)} 列")
 print(f"注意：neg/neu/pos列已改为去重后的列表格式，不再是平均值！")

@@ -21,13 +21,14 @@ import joblib
 
 # -------------------------- 1. 全局配置与初始化 --------------------------
 DATA_DIR = "./data/MRDA"
-LABEL_TYPE = "Full"  # Basic/General/Full
+LABEL_TYPE = "General"  # Basic/General/Full
 SEED = 42
 USE_SAVED_MODEL = False
 TEST_SMALL_BATCH = False
 BATCH_SIZE = 1000
 # 优先用轻量化模型，适配集群CPU/GPU环境
-MODEL_TYPE = "distilbert-base-uncased"
+MODEL_TYPE = "bert-base-uncased"
+# MODEL_TYPE: roberta-base/bert-base-uncased/roberta-large/bert-large-uncased/albert-base-v2
 
 # 训练配置（GPU环境下增大批次）
 MAX_SEQ_LENGTH = 64
