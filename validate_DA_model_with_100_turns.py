@@ -7,23 +7,24 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import joblib
 from tqdm import tqdm
 
-# -------------------------- 1. 全局配置（适配你的实际数据） --------------------------
-MODEL_TYPE = "bert-base-uncased"
-LABEL_TYPE = "General"
+# -------------------------- 1. 全局配置（根据你的实际路径修改） --------------------------
+# 模型类型改为distilbert（因为你的模型是distilbert-base-uncased）
+MODEL_TYPE = "distilbert-base-uncased"  # 从bert改为distilbert
+LABEL_TYPE = "General"  # 保持与你训练时一致
 MAX_SEQ_LENGTH = 64
 
-# 数据路径配置（修改为你的实际路径）
+# 数据路径配置（保持不变或按需修改）
 DATA_DIR = "data/Persuasion_For_Good"
 NEW_DATA_PATH = os.path.join(DATA_DIR, "100_sample_turns_data_with_manual_label.xlsx")
 
-# 输出路径配置（改为output_data文件夹）
+# 输出路径配置
 OUTPUT_DIR = "output_data"
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, "100_sample_with_DA.csv")
 
-# 模型存储路径（你确认模型文件已存在）
+# 【关键修改】模型存储路径 - 直接指向你训练好的模型位置
 MODEL_BASE_DIR = "./models"
-MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, f"{MODEL_TYPE.replace('/', '_')}_DA_MRDA_{LABEL_TYPE.lower()}")
+MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, "distilbert-base-uncased_DA_MRDA_general")  # 直接使用文件夹名
 LABEL_ENCODER_PATH = os.path.join(MODEL_SAVE_DIR, "label_encoder.pkl")
 
 # 设备配置
@@ -37,6 +38,10 @@ if torch.cuda.is_available():
 def load_trained_model():
     print(f"\nLoading Trained Model from {MODEL_SAVE_DIR}")
 
+    # 检查模型目录是否存在
+    if not os.path.exists(MODEL_SAVE_DIR):
+        raise FileNotFoundError(f"Model directory not found: {MODEL_SAVE_DIR}")
+
     # 加载标签编码器
     try:
         label_encoder = joblib.load(LABEL_ENCODER_PATH)
@@ -45,18 +50,18 @@ def load_trained_model():
     except Exception as e:
         raise ValueError(f"Failed to load Label Encoder: {e}\nCheck if {LABEL_ENCODER_PATH} exists!")
 
-    # 加载Tokenizer
+    # 加载Tokenizer（从模型保存目录加载，会自动识别为distilbert）
     try:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_SAVE_DIR)
-        print(f"Loaded Tokenizer (Model Type: {MODEL_TYPE})")
+        print(f"Loaded Tokenizer from {MODEL_SAVE_DIR}")
     except Exception as e:
         raise ValueError(f"Failed to load Tokenizer: {e}")
 
     # 加载模型
     try:
         model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_SAVE_DIR,
-            num_labels = len(label_encoder.classes_)
+            MODEL_SAVE_DIR
+            # 不需要指定num_labels，因为模型配置文件里已经保存了
         )
         model.to(DEVICE)
         model.eval()
@@ -72,18 +77,22 @@ def load_persuasion_data(file_path):
     print(f"\nLoading Data from {file_path}")
     start_time = time.time()
 
+    # 检查文件是否存在
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Data file not found: {file_path}")
+
     # 读取Excel文件
     df = pd.read_excel(file_path)
 
-    # 检查Sentence列（替换原Unit列）
+    # 检查Sentence列
     if "Sentence" not in df.columns:
         raise ValueError(f"'Sentence' column not found in Excel! Columns available: {list(df.columns)}")
 
     # 过滤有效文本（非空 + 去除空格后非空字符串）
-    df["Sentence_str"] = df["Sentence"].astype(str).apply(lambda x: x.strip())  # 对每个文本去空格
-    valid_mask = df["Sentence"].notna() & (df["Sentence_str"] != "")  # 过滤条件
-    raw_df = df[valid_mask].copy().drop(columns = ["Sentence_str"])  # 删除临时列
-    texts = raw_df["Sentence"].astype(str).apply(lambda x: x.strip()).tolist()  # 文本去空格后提取
+    df["Sentence_str"] = df["Sentence"].astype(str).apply(lambda x: x.strip())
+    valid_mask = df["Sentence"].notna() & (df["Sentence_str"] != "")
+    raw_df = df[valid_mask].copy().drop(columns = ["Sentence_str"])
+    texts = raw_df["Sentence"].astype(str).apply(lambda x: x.strip()).tolist()
 
     load_time = time.time() - start_time
     print(
@@ -140,6 +149,11 @@ def batch_predict_da(model, tokenizer, label_encoder, texts, batch_size=64):
 def save_labeled_results(raw_df, pred_labels, output_path):
     print(f"\nSaving Labeled Results to {output_path}")
 
+    # 确保预测标签数量与数据行数一致
+    if len(raw_df) != len(pred_labels):
+        raise ValueError(
+            f"Length mismatch: raw_df has {len(raw_df)} rows, but pred_labels has {len(pred_labels)} labels")
+
     # 新增DA标签列
     result_df = raw_df.copy()
     result_df[f"DA_label_{LABEL_TYPE}"] = pred_labels
@@ -149,27 +163,41 @@ def save_labeled_results(raw_df, pred_labels, output_path):
 
     # 输出统计信息
     print(f"Results Saved Successfully!")
-    print(f"\nResult Sample (First 5 Rows)")
+    print(f"\nResult Sample (First 5 Rows):")
     print(result_df[["Sentence", f"DA_label_{LABEL_TYPE}"]].head())
 
-    print(f"\nDA Label Distribution")
+    print(f"\nDA Label Distribution:")
     label_count = result_df[f"DA_label_{LABEL_TYPE}"].value_counts()
     for label, count in label_count.items():
         percentage = count / len(result_df) * 100
-        print(f"{label}: {count} rows ({percentage:.2f}%)")
+        print(f"  {label}: {count} rows ({percentage:.2f}%)")
 
 
 # -------------------------- 主函数 --------------------------
 def main():
+    print("=" * 60)
+    print("Dialogue Act Prediction Script")
+    print("=" * 60)
+
     # 检查数据目录
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR, exist_ok = True)
         print(f"Created data directory: {DATA_DIR}")
-        raise FileNotFoundError(f"Please put '100_sample_turns_data_with_manual_label.xlsx' into {DATA_DIR} first!")
+
+    # 检查数据文件
+    if not os.path.exists(NEW_DATA_PATH):
+        raise FileNotFoundError(
+            f"Data file not found: {NEW_DATA_PATH}\nPlease put the Excel file in the correct location!")
 
     # 检查模型目录
+    print(f"\nChecking model directory: {MODEL_SAVE_DIR}")
     if not os.path.exists(MODEL_SAVE_DIR):
-        raise FileNotFoundError(f"Model directory not found: {MODEL_SAVE_DIR}\nPlease train the model first!")
+        raise FileNotFoundError(f"Model directory not found: {MODEL_SAVE_DIR}\nExpected model files in this directory!")
+
+    # 列出模型目录中的文件（用于调试）
+    print(f"Files in model directory:")
+    for file in os.listdir(MODEL_SAVE_DIR):
+        print(f"  - {file}")
 
     # 加载模型
     model, tokenizer, label_encoder = load_trained_model()
@@ -177,16 +205,25 @@ def main():
     # 加载数据
     texts, raw_df = load_persuasion_data(NEW_DATA_PATH)
 
+    # 如果没有有效文本，退出
+    if len(texts) == 0:
+        print("No valid texts found in the input file!")
+        return
+
     # 预测标签
     pred_labels = batch_predict_da(model, tokenizer, label_encoder, texts)
 
     # 保存结果
     save_labeled_results(raw_df, pred_labels, OUTPUT_PATH)
 
-    print(f"\nAll Tasks Completed Successfully!")
+    print(f"\n{'=' * 60}")
+    print(f"All Tasks Completed Successfully!")
+    print(f"{'=' * 60}")
     print(f"Input File: {NEW_DATA_PATH}")
     print(f"Output File: {OUTPUT_PATH}")
     print(f"DA Label Level: {LABEL_TYPE}")
+    print(f"Model Used: {MODEL_SAVE_DIR}")
+    print(f"{'=' * 60}")
 
 
 # -------------------------- 运行入口 --------------------------

@@ -11,4 +11,5 @@ mapping_Persuasion_For_Good_data.py
 
 Different environment:
 
-- DA model
+(DA_mrda_bert)
+available for DA model and EML model validate code
