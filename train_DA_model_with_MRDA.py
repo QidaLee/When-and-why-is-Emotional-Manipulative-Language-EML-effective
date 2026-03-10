@@ -21,7 +21,7 @@ import joblib
 
 # -------------------------- 1. 全局配置与初始化 --------------------------
 DATA_DIR = "./data/MRDA"
-LABEL_TYPE = "General"  # Basic/General/Full
+LABEL_TYPE = "Our_label"  # Basic/General/Full/Our_label
 SEED = 42
 USE_SAVED_MODEL = False
 TEST_SMALL_BATCH = False
@@ -62,28 +62,84 @@ nltk.download('punkt_tab', quiet=True)
 def load_mrda_data(file_path, label_type="Basic"):
     texts = []
     labels = []
-    label_idx = {"Basic": 2, "General": 3, "Full": 4}[label_type]
+
+    # 根据你的数据格式（6列）调整索引
+    # 列映射: 0=id, 1=text, 2=Basic, 3=General, 4=Full, 5=Our_label
+    label_idx = {"Basic": 2, "General": 3, "Full": 4, "Our_label": 5}[label_type]
 
     print(f"Starting to load {os.path.basename(file_path)}...")
-    start_time = time.time()
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in tqdm(f, desc=f"Loading {os.path.basename(file_path)}"):
-            line = line.strip()
-            if not line or len(line.split("|")) != 5:
-                continue
-            parts = line.split("|")
-            text = parts[1].strip()
-            label = parts[label_idx].strip()
-            texts.append(text)
-            labels.append(label)
+    print(f"Label type: {label_type}, Column index: {label_idx}")
 
-    if TEST_SMALL_BATCH:
-        texts = texts[:BATCH_SIZE]
-        labels = labels[:BATCH_SIZE]
+    start_time = time.time()
+    sample_count = 0
+    error_count = 0
+
+    with open(file_path, "r", encoding = "utf-8") as f:
+        for i, line in enumerate(tqdm(f, desc = f"Loading {os.path.basename(file_path)}")):
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split("|")
+
+            # 显示前几行用于验证
+            if i < 5:
+                print(f"Debug - Line {i}: columns={len(parts)}")
+                for j, part in enumerate(parts):
+                    print(f"  Column {j}: '{part}'")
+
+            # 检查是否有足够的列
+            if len(parts) < 6:
+                print(f"Warning: Line {i} has only {len(parts)} columns, skipping: {line[:100]}")
+                error_count += 1
+                continue
+
+            try:
+                text = parts[1].strip()  # 第2列是文本
+                label = parts[label_idx].strip()  # 根据标签类型选择列
+
+                if not text or not label:
+                    print(f"Warning: Empty text or label at line {i}: {line[:100]}")
+                    error_count += 1
+                    continue
+
+                texts.append(text)
+                labels.append(label)
+                sample_count += 1
+
+            except Exception as e:
+                print(f"Error parsing line {i}: {e}")
+                print(f"Line content: {line}")
+                error_count += 1
+                continue
 
     load_time = time.time() - start_time
-    print(f"Loaded {os.path.basename(file_path)}: {len(texts)} samples (Time: {load_time:.2f}s)")
-    print(f"Label distribution: {Counter(labels)}")
+
+    print(f"\n{'=' * 50}")
+    print(f"File: {os.path.basename(file_path)}")
+    print(f"Loaded {sample_count} samples successfully")
+    print(f"Errors encountered: {error_count}")
+    print(f"Loading time: {load_time:.2f}s")
+    print(f"Label type: {label_type}")
+
+    if sample_count > 0:
+        # 显示标签统计
+        label_counter = Counter(labels)
+        print(f"\nLabel distribution:")
+        for label, count in label_counter.most_common():
+            print(f"  {label}: {count}")
+
+        # 显示标签类型示例
+        print(f"\nSample labels:")
+        for i, (text, label) in enumerate(zip(texts[:5], labels[:5])):
+            print(f"  {i + 1}. '{text}' -> {label}")
+    else:
+        print("ERROR: No valid samples loaded!")
+        print("Please check:")
+        print("1. File format (should be pipe-separated)")
+        print("2. Column count (should be 6)")
+        print("3. Label type selection (Our_label should be column 5)")
+
     return texts, labels
 
 # -------------------------- 3. 数据预处理与数据集类 --------------------------
