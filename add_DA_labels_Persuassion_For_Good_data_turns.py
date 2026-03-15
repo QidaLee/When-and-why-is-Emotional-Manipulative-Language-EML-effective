@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm  # 进度条，提升体验
 
 # ====================== 配置参数 ======================
-MODEL_PATH = "models/distilbert-base-uncased_DA_MRDA_general"
+MODEL_PATH = "models/bert-base-uncased_DA_MRDA_our_label"
 DATA_PATH = "data/Persuasion_For_Good/all_turns_data.xlsx"
 OUTPUT_PATH = "data/Persuasion_For_Good/all_turns_data_with_DA.xlsx"
 
