@@ -24,7 +24,7 @@ OUTPUT_PATH = os.path.join(OUTPUT_DIR, "100_sample_with_DA.csv")
 
 # 【关键修改】模型存储路径 - 直接指向你训练好的模型位置
 MODEL_BASE_DIR = "./models"
-MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, "distilbert-base-uncased_DA_MRDA_general")  # 直接使用文件夹名
+MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, "bert-base-uncased_DA_MRDA_our_label")  # 直接使用文件夹名
 LABEL_ENCODER_PATH = os.path.join(MODEL_SAVE_DIR, "label_encoder.pkl")
 
 # 设备配置
