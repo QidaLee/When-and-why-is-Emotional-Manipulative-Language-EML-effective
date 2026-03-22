@@ -12,46 +12,78 @@ import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore')
 
 # ==================================================
-# 1. 配置参数
+# 1. 配置参数（更新数据源和标签列）
 # ==================================================
-DATA_PATH = './data/Persuasion_For_Good/300_dialog_with_result.csv'
+# 新的数据源（Excel文件）
+DATA_PATH = './data/Persuasion_For_Good/100_sample_turns_data_with_manual_label.xlsx'
 MODEL_PATH = './models/PR_model'
 MAX_LENGTH = 128
 OUTPUT_DIR = './output_data'
 PLOT_CONFUSION_MATRIX = True
 
+# 真实标签列名
+LABEL_COLUMN = 'persuasion_result_qida'
+# 标签值映射（数字 -> 文本描述）
+LABEL_VALUE_MAP = {
+    1: 'compliance',
+    0: 'neutral',
+    -1: 'resistance'
+}
+
 # 创建输出文件夹
 os.makedirs(OUTPUT_DIR, exist_ok = True)
 
 # ==================================================
-# 2. 加载数据
+# 2. 加载Excel数据并处理标签
 # ==================================================
 print("=" * 60)
-print("Loading Validation Data")
+print("Loading Validation Data (Excel)")
 print("=" * 60)
 
-df = pd.read_csv(DATA_PATH)
+# 读取Excel文件
+df = pd.read_excel(DATA_PATH)
 print(f"Data shape: {df.shape}")
 print(f"Columns: {df.columns.tolist()}")
 
-# 可选：只验证100个样本（和参考文件名对应）
-sample_size = 100
-df = df.sample(n = sample_size, random_state = 42).reset_index(drop = True)
+# 检查标签列是否存在
+if LABEL_COLUMN not in df.columns:
+    raise ValueError(f"标签列 {LABEL_COLUMN} 不存在于数据文件中！")
 
-texts = df['Unit'].astype(str).tolist()
-labels_raw = df['persuasion_result'].tolist()
+# 提取文本和标签（使用指定的标签列）
+texts = df['Unit'].astype(str).tolist() if 'Unit' in df.columns else df.iloc[:, 0].astype(str).tolist()
+labels_raw = df[LABEL_COLUMN].tolist()
 
-# 构建标签映射
-unique_labels = sorted(list(set(labels_raw)))
+# 数据清洗：移除空值或无效标签
+valid_indices = []
+valid_texts = []
+valid_labels = []
+for idx, (text, label) in enumerate(zip(texts, labels_raw)):
+    if pd.notna(label) and label in LABEL_VALUE_MAP.keys():
+        valid_indices.append(idx)
+        valid_texts.append(text)
+        valid_labels.append(label)
+
+print(f"\n原始数据量: {len(texts)}, 有效标签数据量: {len(valid_labels)}")
+
+# 构建标签映射（适配-1/0/1的标签值）
+# 先转换为文本描述，再构建id映射（保持和训练时的标签命名一致）
+labels_text = [LABEL_VALUE_MAP[label] for label in valid_labels]
+unique_labels = sorted(LABEL_VALUE_MAP.values())  # ['compliance', 'neutral', 'resistance']
 label2id = {label: i for i, label in enumerate(unique_labels)}
 id2label = {i: label for label, i in label2id.items()}
-labels = [label2id[label] for label in labels_raw]
 
-print(f"\nLabel mapping: {label2id}")
-print(f"Class distribution:\n{pd.Series(labels_raw).value_counts()}")
+# 将标签转换为模型需要的id
+labels = [label2id[LABEL_VALUE_MAP[label]] for label in valid_labels]
+
+print(f"\n标签映射（数字值 -> 文本 -> ID）:")
+for num_val, text_val in LABEL_VALUE_MAP.items():
+    print(f"  {num_val} -> {text_val} -> ID: {label2id[text_val]}")
+
+print(f"\nClass distribution (文本标签):\n{pd.Series(labels_text).value_counts()}")
+print(f"Class distribution (原始数字标签):\n{pd.Series(valid_labels).value_counts()}")
 
 # ==================================================
-# 3. 加载模型和Tokenizer（核心修复：禁用token_type_ids）
+# 3. 加载模型和Tokenizer
 # ==================================================
 print("\n" + "=" * 60)
 print("Loading Pre-trained Model")
@@ -63,7 +95,7 @@ tokenizer = AutoTokenizer.from_pretrained(
     use_fast = True
 )
 
-# 加载模型
+# 加载模型（确保标签数量和映射匹配）
 model = AutoModelForSequenceClassification.from_pretrained(
     MODEL_PATH,
     num_labels = len(unique_labels),
@@ -79,10 +111,10 @@ print(f"Model loaded on device: {device}")
 
 
 # ==================================================
-# 4. 批量预测函数（核心修复：过滤掉token_type_ids参数）
+# 4. 批量预测函数（修复token_type_ids问题）
 # ==================================================
 def batch_predict(texts, batch_size=16):
-    """批量预测，避免内存溢出，修复token_type_ids错误"""
+    """批量预测，避免内存溢出"""
     all_predictions = []
     all_probabilities = []
 
@@ -126,7 +158,14 @@ print("Running Predictions")
 print("=" * 60)
 
 # 执行批量预测
-predictions, probabilities = batch_predict(texts)
+predictions, probabilities = batch_predict(valid_texts)
+
+# 将预测ID转换回文本标签和原始数字标签
+pred_labels_text = [id2label[pred_id] for pred_id in predictions]
+# 反向映射：文本标签 -> 原始数字
+text2num = {v: k for k, v in LABEL_VALUE_MAP.items()}
+pred_labels_num = [text2num[text] for text in pred_labels_text]
+true_labels_num = valid_labels  # 原始数字标签
 
 # ==================================================
 # 6. 详细评估
@@ -145,8 +184,8 @@ print(f"Overall Accuracy: {accuracy:.4f}")
 print(f"Macro F1 Score: {f1_macro:.4f}")
 print(f"Weighted F1 Score: {f1_weighted:.4f}")
 
-# 打印详细分类报告
-print("\nDetailed Classification Report:")
+# 打印详细分类报告（使用文本标签，更易读）
+print("\nDetailed Classification Report (文本标签):")
 class_report = classification_report(
     labels,
     predictions,
@@ -161,15 +200,27 @@ print(classification_report(
     digits = 4
 ))
 
-# 计算混淆矩阵
+# 打印数字标签的分类报告（便于对照原始数据）
+print("\nClassification Report (原始数字标签):")
+num_target_names = [f"{num} ({text})" for num, text in LABEL_VALUE_MAP.items()]
+num_labels_mapped = [list(LABEL_VALUE_MAP.keys()).index(text2num[label]) for label in labels_text]
+num_pred_mapped = [list(LABEL_VALUE_MAP.keys()).index(text2num[label]) for label in pred_labels_text]
+print(classification_report(
+    num_labels_mapped,
+    num_pred_mapped,
+    target_names = num_target_names,
+    digits = 4
+))
+
+# 计算混淆矩阵（文本标签）
 cm = confusion_matrix(labels, predictions)
 cm_df = pd.DataFrame(
     cm,
-    index = unique_labels,
-    columns = unique_labels
+    index = [f"True: {label}" for label in unique_labels],
+    columns = [f"Pred: {label}" for label in unique_labels]
 )
 
-print("\nConfusion Matrix:")
+print("\nConfusion Matrix (文本标签):")
 print(cm_df)
 
 # ==================================================
@@ -184,7 +235,7 @@ if PLOT_CONFUSION_MATRIX:
         cmap = 'Blues',
         cbar = True
     )
-    plt.title('Confusion Matrix - PR Model Validation (100 Samples)', fontsize = 14)
+    plt.title('Confusion Matrix - PR Model (100 Samples)', fontsize = 14)
     plt.xlabel('Predicted Label', fontsize = 12)
     plt.ylabel('True Label', fontsize = 12)
     plt.xticks(rotation = 45)
@@ -204,14 +255,16 @@ print("=" * 60)
 
 # 找出错误分类的样本
 errors = []
-for i, (true, pred) in enumerate(zip(labels, predictions)):
-    if true != pred:
+for i, (true_id, pred_id) in enumerate(zip(labels, predictions)):
+    if true_id != pred_id:
         errors.append({
-            'text': texts[i][:200] + '...' if len(texts[i]) > 200 else texts[i],
-            'true_label': id2label[true],
-            'pred_label': id2label[pred],
-            'true_prob': probabilities[i][true],
-            'pred_prob': probabilities[i][pred]
+            'text': valid_texts[i][:200] + '...' if len(valid_texts[i]) > 200 else valid_texts[i],
+            'true_label_num': true_labels_num[i],
+            'true_label_text': id2label[true_id],
+            'pred_label_num': pred_labels_num[i],
+            'pred_label_text': id2label[pred_id],
+            'true_prob': probabilities[i][true_id],
+            'pred_prob': probabilities[i][pred_id]
         })
 
 # 打印前5个错误样本
@@ -219,13 +272,13 @@ if errors:
     for i, error in enumerate(errors[:5]):
         print(f"\nError {i + 1}:")
         print(f"Text: {error['text']}")
-        print(f"True Label: {error['true_label']} (Prob: {error['true_prob']:.4f})")
-        print(f"Pred Label: {error['pred_label']} (Prob: {error['pred_prob']:.4f})")
+        print(f"True: {error['true_label_num']} ({error['true_label_text']}) (Prob: {error['true_prob']:.4f})")
+        print(f"Pred: {error['pred_label_num']} ({error['pred_label_text']}) (Prob: {error['pred_prob']:.4f})")
 else:
     print("No misclassified examples found!")
 
 # ==================================================
-# 9. 保存评估结果
+# 9. 保存评估结果（包含原始数字标签）
 # ==================================================
 # 1) 保存核心评估指标
 metrics_df = pd.DataFrame({
@@ -235,12 +288,14 @@ metrics_df = pd.DataFrame({
 metrics_save_path = os.path.join(OUTPUT_DIR, 'pr_model_validation_metrics_100samples.csv')
 metrics_df.to_csv(metrics_save_path, index = False)
 
-# 2) 保存完整预测结果（100样本版本）
+# 2) 保存完整预测结果（包含原始数字标签）
 results_df = pd.DataFrame({
-    'text': texts,
-    'true_label': [id2label[l] for l in labels],
-    'pred_label': [id2label[p] for p in predictions],
-    'is_correct': [l == p for l, p in zip(labels, predictions)]
+    'text': valid_texts,
+    'true_label_num': true_labels_num,
+    'true_label_text': labels_text,
+    'pred_label_num': pred_labels_num,
+    'pred_label_text': pred_labels_text,
+    'is_correct': [t == p for t, p in zip(labels, predictions)]
 })
 
 # 添加每个类别的概率
@@ -249,7 +304,7 @@ for i, label in enumerate(unique_labels):
 
 # 命名和参考文件风格一致
 results_save_path = os.path.join(OUTPUT_DIR, '100_sample_with_PR_predictions.csv')
-results_df.to_csv(results_save_path, index = False)
+results_df.to_csv(results_save_path, index = False, encoding = 'utf-8-sig')
 
 # 3) 保存混淆矩阵数据
 cm_save_path_csv = os.path.join(OUTPUT_DIR, 'pr_model_confusion_matrix_100samples.csv')
