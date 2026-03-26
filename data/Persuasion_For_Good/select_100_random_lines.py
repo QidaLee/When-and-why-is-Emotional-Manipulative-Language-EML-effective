@@ -39,7 +39,7 @@ print("重命名后的列名：")
 print(df_clean.columns.tolist())
 print("\n")
 
-# 处理标签列缺失值（NaN替换为空字符串，便于后续去重）
+# 处理标签列缺失值（NaN替换为空字符串，便于后续列表处理）
 label_columns = ['er_label_1', 'ee_label_1', 'er_label_2', 'ee_label_2']
 for col in label_columns:
     if col in df_clean.columns:
@@ -52,25 +52,76 @@ for col in emotion_columns:
         df_clean[col] = df_clean[col].fillna(0.0)
 
 
-# 3. 定义合并函数
+# ========== 解析字符串列表为实际列表 ==========
+def parse_string_list(s):
+    """
+    解析原始标签列的字符串格式（如 "['greeting', 'task-related-inquiry']"）为实际列表
+    处理空值、空字符串、纯空格等情况，不做去重
+    """
+    if pd.isna(s) or s == '' or s.strip() == '[]':
+        return []
+
+    # 清理字符串格式
+    s = str(s).strip().strip('[]').replace("'", "").replace('"', '')
+    if s == '':
+        return []
+
+    # 分割并清理每个标签（保留所有项，包括重复项）
+    items = [item.strip() for item in s.split(',') if item.strip()]
+    return items
+
+
+# 3. 定义合并函数（完全不去重）
 def merge_sentences_and_labels(group):
     """
     合并同一Dialogue_ID、Role、Turn下的数据，保留原始行号用于排序
-    所有标签列和情感列都保存为去重后的列表形式
+    所有标签列和情感列都保存为原始顺序的列表形式（完全不去重）
     """
+    # 按原始行号排序（保证合并顺序和原始数据一致）
+    group_sorted = group.sort_index()
+
     # 合并句子（空格连接）
-    merged_sentence = ' '.join(group['Sentence'].astype(str).tolist())
+    merged_sentence = ' '.join(group_sorted['Sentence'].astype(str).tolist())
 
-    # 收集所有非空标签，去重后排序
-    all_er_label_1 = list(set([label for label in group['er_label_1'] if label != '']))
-    all_ee_label_1 = list(set([label for label in group['ee_label_1'] if label != '']))
-    all_er_label_2 = list(set([label for label in group['er_label_2'] if label != '']))
-    all_ee_label_2 = list(set([label for label in group['ee_label_2'] if label != '']))
+    # ========== 标签列处理：保留所有项，完全不去重 ==========
+    # 先解析所有标签为列表，再合并（保留所有项和顺序）
+    all_er_label_1 = []
+    all_ee_label_1 = []
+    all_er_label_2 = []
+    all_ee_label_2 = []
 
-    # 情感值保存为去重后的列表
-    all_neg = list(set([round(float(val), 3) for val in group['neg']]))  # 保留3位小数去重
-    all_neu = list(set([round(float(val), 3) for val in group['neu']]))
-    all_pos = list(set([round(float(val), 3) for val in group['pos']]))
+    # 遍历排序后的分组数据，按原始顺序收集标签（保留所有项）
+    for idx, row in group_sorted.iterrows():
+        # 解析并合并er_label_1（保留所有项）
+        er1_labels = parse_string_list(row['er_label_1'])
+        all_er_label_1.extend(er1_labels)
+
+        # 解析并合并ee_label_1（保留所有项）
+        ee1_labels = parse_string_list(row['ee_label_1'])
+        all_ee_label_1.extend(ee1_labels)
+
+        # 解析并合并er_label_2（保留所有项）
+        er2_labels = parse_string_list(row['er_label_2'])
+        all_er_label_2.extend(er2_labels)
+
+        # 解析并合并ee_label_2（保留所有项）
+        ee2_labels = parse_string_list(row['ee_label_2'])
+        all_ee_label_2.extend(ee2_labels)
+
+    # ========== 情感值处理：保留所有项，完全不去重 ==========
+    all_neg = []
+    all_neu = []
+    all_pos = []
+
+    for idx, row in group_sorted.iterrows():
+        # 处理情感值（转为浮点数，保留3位小数，保留所有项）
+        neg_val = round(float(row['neg']) if pd.notna(row['neg']) else 0.0, 3)
+        neu_val = round(float(row['neu']) if pd.notna(row['neu']) else 0.0, 3)
+        pos_val = round(float(row['pos']) if pd.notna(row['pos']) else 0.0, 3)
+
+        all_neg.append(neg_val)
+        all_neu.append(neu_val)
+        all_pos.append(pos_val)
 
     # 记录分组内最小原始行号（用于后续排序）
     min_original_index = group.index.min()
@@ -173,15 +224,24 @@ print(f"\n数据角色分布：")
 print(f"  Role=0（说服者）：{role_distribution.get(0, 0)} 行")
 print(f"  Role=1（被说服者）：{role_distribution.get(1, 0)} 行")
 
-# 验证情感列格式（展示前3行的情感列表）
-print(f"\n情感列格式验证（前3行）：")
+# 验证标签列（保留所有项，不去重）
+print(f"\n标签列验证（前3行，保留所有项）：")
 for i in range(min(3, len(df_final))):
     row = df_final.iloc[i]
-    print(f"index={row['index']}: neg={row['neg']}, neu={row['neu']}, pos={row['pos']}")
+    print(f"index={row['index']}: ee_label_1={row['ee_label_1']} (长度：{len(row['ee_label_1'])})")
+    print(f"          er_label_1={row['er_label_1']} (长度：{len(row['er_label_1'])})")
+
+# 验证情感列（保留所有项，不去重）
+print(f"\n情感列验证（前3行，保留所有项）：")
+for i in range(min(3, len(df_final))):
+    row = df_final.iloc[i]
+    print(f"index={row['index']}: neg={row['neg']} (长度：{len(row['neg'])})")
+    print(f"          neu={row['neu']} (长度：{len(row['neu'])})")
+    print(f"          pos={row['pos']} (长度：{len(row['pos'])})")
 
 # 显示前5行核心信息
 print(f"\n数据前5行：")
-display_cols = ['index', 'Dialogue_ID', 'Role', 'Turn', 'neg', 'neu', 'pos']
+display_cols = ['index', 'Dialogue_ID', 'Role', 'Turn', 'ee_label_1', 'neg', 'neu', 'pos']
 print(df_final[display_cols].head())
 
 # 8. 保存结果
@@ -195,4 +255,6 @@ df_final.to_excel(output_file, index = False, engine = 'openpyxl')
 print(f"\n 数据处理完成！")
 print(f"文件已保存为：{output_file}")
 print(f"当前模式：{'抽样模式' if SAMPLE_ENABLED else '全部数据处理模式'}")
-print(f"注意：neg/neu/pos列已改为去重后的列表格式，不再是平均值！")
+print(f"✅ 已完全移除所有去重逻辑（包括set()函数）")
+print(f"✅ 标签列和情感列保留原始顺序和所有重复项")
+print(f"✅ 合并后的列表和原始数据完全对应，无任何数据丢失")
