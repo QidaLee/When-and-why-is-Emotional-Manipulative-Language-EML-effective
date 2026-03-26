@@ -23,8 +23,7 @@ print("=" * 50)
 print("Loading Data")
 print("=" * 50)
 
-# TODO: Change to your actual file name
-df = pd.read_csv('./data/Persuasion_For_Good/300_dialog_with_result.csv')
+df = pd.read_excel('./data/Persuasion_For_Good/all_turns_data_with_PR_label.xlsx')
 
 print(f"Data shape: {df.shape}")
 print(f"Columns: {df.columns.tolist()}")
@@ -32,9 +31,7 @@ print(f"Columns: {df.columns.tolist()}")
 # ==================================================
 # 2. Select Features and Labels
 # ==================================================
-# Text column: 'Unit'
-# Label column: 'persuasion_result'
-texts = df['Unit'].astype(str).tolist()
+texts = df['Sentence'].astype(str).tolist()
 labels_raw = df['persuasion_result'].tolist()
 
 # ==================================================
@@ -58,17 +55,17 @@ print("=" * 50)
 class_counts = pd.Series(labels_raw).value_counts()
 print(class_counts)
 print("\nPercentages:")
-print(pd.Series(labels_raw).value_counts(normalize = True) * 100)
+print(pd.Series(labels_raw).value_counts(normalize=True) * 100)
 
 # ==================================================
 # 5. Compute Class Weights (Handle Imbalance)
 # ==================================================
 class_weights = class_weight.compute_class_weight(
     'balanced',
-    classes = np.unique(labels),
-    y = labels
+    classes=np.unique(labels),
+    y=labels
 )
-class_weights = torch.tensor(class_weights, dtype = torch.float32)
+class_weights = torch.tensor(class_weights, dtype=torch.float32)
 print(f"\nClass weights: {class_weights}")
 
 # ==================================================
@@ -81,9 +78,9 @@ print("=" * 50)
 X_train, X_val, y_train, y_val = train_test_split(
     texts,
     labels,
-    test_size = 0.2,
-    random_state = 42,
-    stratify = labels
+    test_size=0.2,
+    random_state=42,
+    stratify=labels
 )
 
 print(f"Training set size: {len(X_train)}")
@@ -105,17 +102,15 @@ print("\n" + "=" * 50)
 print("Loading Model")
 print("=" * 50)
 
-# Using smaller model for faster training, can be changed
 model_name = "distilbert-base-uncased"
 
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(
     model_name,
-    num_labels = len(unique_labels),
-    id2label = id2label,
-    label2id = label2id
+    num_labels=len(unique_labels),
+    id2label=id2label,
+    label2id=label2id
 )
-
 
 # ==================================================
 # 9. Tokenization Function
@@ -123,78 +118,69 @@ model = AutoModelForSequenceClassification.from_pretrained(
 def tokenize_function(examples):
     return tokenizer(
         examples['text'],
-        padding = 'max_length',
-        truncation = True,
-        max_length = 128  # Adjust based on your text length
+        padding='max_length',
+        truncation=True,
+        max_length=128
     )
 
-
 print("\nTokenizing datasets...")
-train_dataset = train_dataset.map(tokenize_function, batched = True)
-val_dataset = val_dataset.map(tokenize_function, batched = True)
+train_dataset = train_dataset.map(tokenize_function, batched=True)
+val_dataset = val_dataset.map(tokenize_function, batched=True)
 
-# Set format for PyTorch
-train_dataset.set_format(type = 'torch', columns = ['input_ids', 'attention_mask', 'label'])
-val_dataset.set_format(type = 'torch', columns = ['input_ids', 'attention_mask', 'label'])
-
+train_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
+val_dataset.set_format(type='torch', columns=['input_ids', 'attention_mask', 'label'])
 
 # ==================================================
 # 10. Custom Trainer with Class Weights
 # ==================================================
 class WeightedTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
         outputs = model(**inputs)
         logits = outputs.logits
 
-        # Get device from model parameters (works with DataParallel)
         device = next(model.parameters()).device
-        loss_fct = nn.CrossEntropyLoss(weight = class_weights.to(device))
+        loss_fct = nn.CrossEntropyLoss(weight=class_weights.to(device))
 
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
 # ==================================================
-# 11. Training Arguments
+# 11. Training Arguments  ✅ 修复版本
 # ==================================================
 training_args = TrainingArguments(
-    output_dir = './results/PR_model',
-    num_train_epochs = 15,
-    learning_rate = 1e-5,
-    per_device_train_batch_size = 8,
-    per_device_eval_batch_size = 16,
-    warmup_ratio = 0.2,
-    weight_decay = 0.01,
-    logging_steps = 50,
-    eval_strategy = 'epoch',
-    save_strategy = 'epoch',
-    load_best_model_at_end = True,
-    metric_for_best_model = 'eval_f1_macro',
-    greater_is_better = True,
-    save_total_limit = 2,
-    remove_unused_columns = False,
-    report_to = 'none'
+    output_dir='./results/PR_model',
+    num_train_epochs=15,
+    learning_rate=1e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=16,
+    warmup_ratio=0.2,
+    weight_decay=0.01,
+    logging_steps=50,
+    evaluation_strategy='epoch',  # 修复：老版本用这个
+    save_strategy='epoch',
+    load_best_model_at_end=True,
+    metric_for_best_model='f1_macro',
+    greater_is_better=True,
+    save_total_limit=2,
+    report_to='none'
 )
-
-callbacks = [EarlyStoppingCallback(early_stopping_patience = 5)]
 
 # ==================================================
 # 12. Evaluation Metrics
 # ==================================================
 from sklearn.metrics import accuracy_score, f1_score, classification_report
 
-
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
-    predictions = np.argmax(predictions, axis = 1)
+    predictions = np.argmax(predictions, axis=1)
 
     accuracy = accuracy_score(labels, predictions)
-    f1_macro = f1_score(labels, predictions, average = 'macro')
-    f1_weighted = f1_score(labels, predictions, average = 'weighted')
+    f1_macro = f1_score(labels, predictions, average='macro')
+    f1_weighted = f1_score(labels, predictions, average='weighted')
 
-    # Print detailed classification report
     print("\nClassification Report:")
-    print(classification_report(labels, predictions, target_names = unique_labels))
+    print(classification_report(labels, predictions, target_names=unique_labels))
 
     return {
         'accuracy': accuracy,
@@ -202,17 +188,16 @@ def compute_metrics(eval_pred):
         'f1_weighted': f1_weighted
     }
 
-
 # ==================================================
 # 13. Initialize Trainer
 # ==================================================
 trainer = WeightedTrainer(
-    model = model,
-    args = training_args,
-    train_dataset = train_dataset,
-    eval_dataset = val_dataset,
-    compute_metrics = compute_metrics,
-    callbacks = [EarlyStoppingCallback(early_stopping_patience = 3)]
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    compute_metrics=compute_metrics,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
 )
 
 # ==================================================
@@ -249,28 +234,19 @@ print("\n" + "=" * 50)
 print("Example Predictions")
 print("=" * 50)
 
-
 def predict(text):
-    # Tokenize
-    inputs = tokenizer(text, return_tensors = 'pt', truncation = True, max_length = 128, padding = True)
-
-    # Get model device and move inputs to same device
+    inputs = tokenizer(text, return_tensors='pt', truncation=True, max_length=128, padding=True)
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     model.eval()
     with torch.no_grad():
         outputs = model(**inputs)
-        predictions = torch.nn.functional.softmax(outputs.logits, dim = -1)
+        predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
         predicted_class_id = predictions.argmax().item()
-
-    # Move to CPU for output
-    predictions = predictions.cpu()
 
     return id2label[predicted_class_id], predictions[0].tolist()
 
-
-# Test a few validation samples
 for i in range(min(5, len(X_val))):
     text = X_val[i]
     true_label = id2label[y_val[i]]
@@ -278,4 +254,4 @@ for i in range(min(5, len(X_val))):
     print(f"\nText: {text[:100]}..." if len(text) > 100 else f"\nText: {text}")
     print(f"True label: {true_label}")
     print(f"Predicted label: {pred_label}")
-    print(f"Probability distribution: {dict(zip(unique_labels, [round(p, 3) for p in probs]))}")
+    print(f"Probability: {dict(zip(unique_labels, [round(p,3) for p in probs]))}")
