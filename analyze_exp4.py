@@ -12,61 +12,75 @@ plt.rcParams['axes.unicode_minus'] = False
 plt.style.use('seaborn-v0_8-whitegrid')
 
 # ----------------------
-# Config
+# 🔧 最新精细配置
 # ----------------------
 VALID_PR_LABELS = ['Compliance', 'Resistance']
-OUTPUT_EXCEL = 'exp3_eml_between_pr_transitions.xlsx'
+OUTPUT_EXCEL = 'exp3_final_pr_transitions.xlsx'
+TURN_GAP_THRESHOLD = 3  # 🔴 你要求：最大允许 turn 差 = 3
 
 # ----------------------
-# 1. Load & Clean Data
+# 1. 加载数据
 # ----------------------
 df = pd.read_excel('output_data/all_turns_data_with_EML_DA_PR.xlsx')
 
 df['Turn'] = pd.to_numeric(df['Turn'], errors='coerce')
 df['EML_label'] = pd.to_numeric(df['EML_label'], errors='coerce').fillna(0).astype(int)
-df = df.dropna(subset=['Dialogue_ID', 'Turn'])
+df = df.dropna(subset=['Dialogue_ID', 'Turn', 'Role'])  #  FIX: speaker → Role
 df = df.sort_values(['Dialogue_ID', 'Turn']).reset_index(drop=True)
 
-# Only keep valid PR rows
+# 只保留有效PR
 pr_valid = df[df['PR_label'].isin(VALID_PR_LABELS)].copy()
 pr_valid = pr_valid.sort_values(['Dialogue_ID', 'Turn']).reset_index(drop=True)
 
 # ----------------------
-# 2. Extract PR Transitions & Check EML between them
+# 2. 提取 PR 转移（✅ 双条件：Same Role + Turn Gap ≤3）
 # ----------------------
 transitions = []
 
 for dia_id, dia_df in pr_valid.groupby('Dialogue_ID'):
-    turns = dia_df['Turn'].tolist()
-    prs = dia_df['PR_label'].tolist()
+    dia_df = dia_df.sort_values('Turn').reset_index(drop=True)
+    pr_list = dia_df.to_dict('records')
 
-    # Iterate consecutive PR pairs
-    for i in range(len(prs) - 1):
-        t_prev = turns[i]
-        t_next = turns[i+1]
-        pr_prev = prs[i]
-        pr_next = prs[i+1]
+    # 遍历连续PR对
+    for i in range(len(pr_list) - 1):
+        prev = pr_list[i]
+        next_pr = pr_list[i+1]
 
-        # Check if any EML exists between t_prev and t_next
+        # ===================== 核心条件 =====================
+        # 1. 必须是同一个 Role（FIX: speaker → Role）
+        if prev['Role'] != next_pr['Role']:
+            continue
+
+        # 2. 必须满足 turn 差 ≤ 3
+        turn_gap = next_pr['Turn'] - prev['Turn']
+        if turn_gap > TURN_GAP_THRESHOLD:
+            continue
+        # ====================================================
+
+        # 检查两个PR之间是否有EML
         between_df = df[
             (df['Dialogue_ID'] == dia_id) &
-            (df['Turn'] > t_prev) &
-            (df['Turn'] < t_next)
+            (df['Turn'] > prev['Turn']) &
+            (df['Turn'] < next_pr['Turn'])
         ]
         has_eml_between = int((between_df['EML_label'] == 1).any())
 
         transitions.append({
             'Dialogue_ID': dia_id,
-            'PR_Prev': pr_prev,
-            'PR_Next': pr_next,
-            'Transition': f"{pr_prev}→{pr_next}",
+            'Role': prev['Role'],  # FIX: Speaker → Role
+            'Turn_Prev': prev['Turn'],
+            'Turn_Next': next_pr['Turn'],
+            'Turn_Gap': turn_gap,
+            'PR_Prev': prev['PR_label'],
+            'PR_Next': next_pr['PR_label'],
+            'Transition': f"{prev['PR_label']}→{next_pr['PR_label']}",
             'Has_EML_Between': 'With_EML' if has_eml_between else 'Without_EML'
         })
 
 trans_df = pd.DataFrame(transitions)
 
 # ----------------------
-# 3. Count Transitions for Two Groups
+# 3. 统计 With / Without EML
 # ----------------------
 transition_types = [
     'Compliance→Compliance',
@@ -99,7 +113,7 @@ summary['With_EML_Ratio'] = (summary['With_EML'] / total_with * 100) if total_wi
 summary['Without_EML_Ratio'] = (summary['Without_EML'] / total_without * 100) if total_without > 0 else 0
 
 # ----------------------
-# 4. Build Transition Matrix
+# 4. 转移矩阵
 # ----------------------
 def build_matrix(counts):
     mat = np.array([
@@ -114,7 +128,7 @@ mat_with_ratio, mat_with_abs = build_matrix(with_eml_counts)
 mat_without_ratio, mat_without_abs = build_matrix(without_eml_counts)
 
 # ----------------------
-# 5. Heatmap (Same as Exp2)
+# 5. 热力图
 # ----------------------
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
@@ -129,11 +143,11 @@ ax2.set_xlabel('Next PR')
 ax2.set_ylabel('Current PR')
 
 plt.tight_layout()
-plt.savefig('exp3_pr_transition_heatmap.png', dpi=300, bbox_inches='tight')
+plt.savefig('exp3_final_heatmap.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # ----------------------
-# 6. Directed Graph
+# 6. 有向图
 # ----------------------
 def plot_graph(counts, title, save_path):
     G = nx.DiGraph()
@@ -153,7 +167,7 @@ def plot_graph(counts, title, save_path):
     max_w = max([w for _,_,w in edges]) if edges else 1
     widths = [w/max_w*5 for _,_,w in edges]
     nx.draw_networkx_edges(G, pos, width=widths, arrowstyle='->', arrowsize=20, alpha=0.6)
-    nx.draw_networkx_edge_labels(G, pos, {(u,v):str(w) for u,v,w in edges}, font_size=10)
+    nx.draw_networkx_edge_labels(G, pos, {(u,v): str(w) for u,v,w in edges}, font_size=10)
     nx.draw_networkx_labels(G, pos, font_weight='bold')
     plt.title(title)
     plt.axis('off')
@@ -162,12 +176,12 @@ def plot_graph(counts, title, save_path):
     plt.show()
 
 if total_with > 0:
-    plot_graph(with_eml_counts, 'With EML between PRs', 'exp3_graph_with_eml.png')
+    plot_graph(with_eml_counts, 'With EML between PRs', 'exp3_final_graph_with.png')
 if total_without > 0:
-    plot_graph(without_eml_counts, 'Without EML between PRs', 'exp3_graph_without_eml.png')
+    plot_graph(without_eml_counts, 'Without EML between PRs', 'exp3_final_graph_without.png')
 
 # ----------------------
-# 7. Bar Chart WITH PERCENTAGE LABELS (Modified here)
+# 7. 柱状图（带百分比）
 # ----------------------
 plt.figure(figsize=(12,6))
 x = np.arange(len(summary))
@@ -178,18 +192,15 @@ bars2 = plt.bar(x + w/2, summary['Without_EML_Ratio'], w, label='Without EML', c
 
 plt.xticks(x, summary['Transition'], rotation=15, ha='right')
 plt.ylabel('Ratio (%)')
-plt.title('PR Transition by EML Presence Between PRs')
+plt.title('PR Transition (Same Role, Turn Gap ≤3)')
 plt.legend()
 
-# ----------------------
-# 🌟 ADD PERCENTAGE LABELS 🌟
-# ----------------------
+# 显示百分比
 for bar in bars1:
     height = bar.get_height()
     if height > 0:
         plt.text(bar.get_x() + bar.get_width()/2., height + 0.5,
                  f'{height:.1f}%', ha='center', va='bottom', fontsize=10)
-
 for bar in bars2:
     height = bar.get_height()
     if height > 0:
@@ -197,11 +208,11 @@ for bar in bars2:
                  f'{height:.1f}%', ha='center', va='bottom', fontsize=10)
 
 plt.tight_layout()
-plt.savefig('exp3_transition_bar.png', dpi=300, bbox_inches='tight')
+plt.savefig('exp3_final_bar.png', dpi=300, bbox_inches='tight')
 plt.show()
 
 # ----------------------
-# 8. Stability & Switch Rate
+# 8. 稳定性 & 切换率
 # ----------------------
 def stability(counts):
     total = sum(counts)
@@ -215,35 +226,35 @@ stab_with, switch_with = stability(with_eml_counts)
 stab_without, switch_without = stability(without_eml_counts)
 
 # ----------------------
-# 9. Print Summary
+# 9. 输出最终结果
 # ----------------------
-print("="*60)
-print("          Experiment 3: PR Transition with/without EML in between")
-print("="*60)
+print("=" * 80)
+print("              Experiment 3 FINAL: Same Role + Turn Gap ≤3")
+print("=" * 80)
 print("\nTransition Counts & Ratios:")
 print(summary.round(2))
 
-print("\nTransition Matrix (With EML between PRs):")
+print("\nWith EML Matrix:")
 print(mat_with_abs.astype(int))
 
-print("\nTransition Matrix (Without EML between PRs):")
+print("\nWithout EML Matrix:")
 print(mat_without_abs.astype(int))
 
 print("\nStability Analysis:")
-print(f"With EML between PRs: Stability={stab_with:.2f}%, Switch={switch_with:.2f}%")
-print(f"No EML between PRs:  Stability={stab_without:.2f}%, Switch={switch_without:.2f}%")
+print(f"With EML : Stability={stab_with:.2f}%, Switch={switch_with:.2f}%")
+print(f"Without EML : Stability={stab_without:.2f}%, Switch={switch_without:.2f}%")
 
 print("\nSample Size:")
-print(f"Total transitions with EML between: {total_with}")
-print(f"Total transitions without EML between: {total_without}")
+print(f"Total valid transitions WITH EML: {total_with}")
+print(f"Total valid transitions WITHOUT EML: {total_without}")
 
 # ----------------------
-# 10. Save to Excel
+# 10. 保存Excel
 # ----------------------
 with pd.ExcelWriter(OUTPUT_EXCEL, engine='openpyxl') as f:
-    summary.to_excel(f, sheet_name='Transition_Summary', index=False)
+    summary.to_excel(f, sheet_name='Summary', index=False)
     mat_with_abs.to_excel(f, sheet_name='With_EML_Matrix')
     mat_without_abs.to_excel(f, sheet_name='Without_EML_Matrix')
-    trans_df.to_excel(f, sheet_name='All_Transitions', index=False)
+    trans_df.to_excel(f, sheet_name='All_Valid_Transitions', index=False)
 
-print(f"\nResults saved to: {OUTPUT_EXCEL}")
+print(f"\n✅ Final results saved to: {OUTPUT_EXCEL}")
