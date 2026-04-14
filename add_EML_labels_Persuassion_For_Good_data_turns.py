@@ -9,6 +9,9 @@ import string
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 import warnings
+import os
+
+HF_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
