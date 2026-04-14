@@ -17,7 +17,6 @@ warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
-HF_TOKEN = "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"
 INPUT_DATA_PATH = "./data/Persuasion_For_Good/all_turns_data.xlsx"
 OUTPUT_DATA_PATH = "./output_data/all_turns_data_with_eml_label.xlsx"
 BASE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
