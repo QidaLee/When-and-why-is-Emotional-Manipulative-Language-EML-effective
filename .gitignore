@@ -4,12 +4,21 @@
 *.jpg
 *.jpeg
 *.pyc
+*.xml
+*.iml
+*.out
+*.name
+
+train_logs_PR/*
+
 __pycache__/
 .DS_Store
 data/MRDA/*.txt
 *.csv
 *.json
 *.pkl
+
+data/MRDA/backup/*.txt
 
 models/
 *.joblib
