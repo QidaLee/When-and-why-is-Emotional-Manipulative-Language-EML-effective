@@ -181,5 +181,6 @@ if __name__ == "__main__":
     )
 
     # Uncomment to process train / test sets
-    # merge_speaker_utterance("backup/train_set.txt", "train_set_merged.txt")
-    # merge_speaker_utterance("backup/test_set.txt", "test_set_merged.txt")
+    merge_speaker_utterance("train_set.txt", "train_set_merged.txt")
+    merge_speaker_utterance("test_set.txt", "test_set_merged.txt")
+    merge_speaker_utterance("val_set.txt", "val_set_merged.txt")
