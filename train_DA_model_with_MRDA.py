@@ -2,154 +2,97 @@ import os
 import re
 import time
 import numpy as np
-import pandas as pd
-from collections import Counter
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from collections import Counter
 from torch.utils.data import Dataset, DataLoader
 from transformers import (
     AutoConfig, AutoModelForSequenceClassification, AutoTokenizer,
     Trainer, TrainingArguments, EarlyStoppingCallback
 )
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics import classification_report, accuracy_score, f1_score
 import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
 from tqdm import tqdm
 import joblib
 
-# -------------------------- 1. 全局配置与初始化 --------------------------
+# -------------------------- 1. Global Config --------------------------
 DATA_DIR = "./data/MRDA"
-LABEL_TYPE = "Our_label"  # Basic/General/Full/Our_label
 SEED = 42
 USE_SAVED_MODEL = False
-TEST_SMALL_BATCH = False
 BATCH_SIZE = 1000
-# 优先用轻量化模型，适配集群CPU/GPU环境
-MODEL_TYPE = "distilbert-base-uncased"
-# MODEL_TYPE: distilbert-base-uncased/roberta-base/bert-base-uncased/roberta-large/bert-large-uncased/albert-base-v2
 
-# 训练配置（GPU环境下增大批次）
-MAX_SEQ_LENGTH = 64
-TRAIN_BATCH_SIZE = 32  # GPU环境建议32，显存不足可改为16
-EVAL_BATCH_SIZE = 64
+MODEL_TYPE = "distilbert-base-uncased"
+MAX_SEQ_LENGTH = 128  # Increased for longer merged utterances
+TRAIN_BATCH_SIZE = 16
+EVAL_BATCH_SIZE = 32
 LEARNING_RATE = 2e-5
-NUM_EPOCHS = 3
+NUM_EPOCHS = 5
 WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 EARLY_STOPPING_PATIENCE = 2
 
-# 路径配置
+# Paths
 MODEL_BASE_DIR = "./models"
-MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, f"{MODEL_TYPE.replace('/', '_')}_DA_MRDA_{LABEL_TYPE.lower()}")
-TOKENIZER_SAVE_PATH = MODEL_SAVE_DIR  # tokenizer和模型同目录，简化加载
-LABEL_ENCODER_PATH = os.path.join(MODEL_SAVE_DIR, "label_encoder.pkl")
-os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
+MODEL_SAVE_DIR = os.path.join(MODEL_BASE_DIR, f"{MODEL_TYPE.replace('/', '_')}_DA_MULTILABEL_MERGED")
+TOKENIZER_SAVE_PATH = MODEL_SAVE_DIR
+MLB_PATH = os.path.join(MODEL_SAVE_DIR, "mlb.pkl")
+os.makedirs(MODEL_SAVE_DIR, exist_ok = True)
 
-# 设备配置（自动检测GPU/CPU）
+# Device
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
-if torch.cuda.is_available():
-    print(f"GPU: {torch.cuda.get_device_name(0)}")
-    print(f"Available GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
 
-# NLTK初始化
-nltk.download('stopwords', quiet=True)
-nltk.download('punkt_tab', quiet=True)
+# NLTK
+nltk.download('stopwords', quiet = True)
+nltk.download('punkt_tab', quiet = True)
 
-# -------------------------- 2. 数据加载（兼容原有逻辑） --------------------------
-def load_mrda_data(file_path, label_type="Basic"):
+
+# -------------------------- 2. Load New Merged 3-Column Dataset --------------------------
+def load_merged_multi_label_data(file_path):
+    """
+    Load NEW merged dataset:
+    Format: speaker | merged_text | da_labels (comma separated)
+    Returns: texts, list_of_label_lists
+    """
     texts = []
-    labels = []
+    multi_labels = []
 
-    # 根据你的数据格式（6列）调整索引
-    # 列映射: 0=id, 1=text, 2=Basic, 3=General, 4=Full, 5=Our_label
-    label_idx = {"Basic": 2, "General": 3, "Full": 4, "Our_label": 5}[label_type]
-
-    print(f"Starting to load {os.path.basename(file_path)}...")
-    print(f"Label type: {label_type}, Column index: {label_idx}")
-
-    start_time = time.time()
-    sample_count = 0
-    error_count = 0
+    print(f"Loading merged multi-label file: {os.path.basename(file_path)}")
 
     with open(file_path, "r", encoding = "utf-8") as f:
-        for i, line in enumerate(tqdm(f, desc = f"Loading {os.path.basename(file_path)}")):
+        for i, line in enumerate(tqdm(f, desc = "Loading")):
             line = line.strip()
             if not line:
                 continue
 
             parts = line.split("|")
-
-            # 显示前几行用于验证
-            if i < 5:
-                print(f"Debug - Line {i}: columns={len(parts)}")
-                for j, part in enumerate(parts):
-                    print(f"  Column {j}: '{part}'")
-
-            # 检查是否有足够的列
-            if len(parts) < 6:
-                print(f"Warning: Line {i} has only {len(parts)} columns, skipping: {line[:100]}")
-                error_count += 1
+            if len(parts) < 3:
                 continue
 
-            try:
-                text = parts[1].strip()  # 第2列是文本
-                label = parts[label_idx].strip()  # 根据标签类型选择列
+            speaker = parts[0].strip()
+            text = parts[1].strip()
+            label_str = parts[2].strip()
 
-                if not text or not label:
-                    print(f"Warning: Empty text or label at line {i}: {line[:100]}")
-                    error_count += 1
-                    continue
+            # Split comma-separated labels into a list
+            labels = [l.strip() for l in label_str.split(",") if l.strip()]
 
+            if text and len(labels) > 0:
                 texts.append(text)
-                labels.append(label)
-                sample_count += 1
+                multi_labels.append(labels)
 
-            except Exception as e:
-                print(f"Error parsing line {i}: {e}")
-                print(f"Line content: {line}")
-                error_count += 1
-                continue
+    print(f"Loaded {len(texts)} multi-label samples")
+    return texts, multi_labels
 
-    load_time = time.time() - start_time
 
-    print(f"\n{'=' * 50}")
-    print(f"File: {os.path.basename(file_path)}")
-    print(f"Loaded {sample_count} samples successfully")
-    print(f"Errors encountered: {error_count}")
-    print(f"Loading time: {load_time:.2f}s")
-    print(f"Label type: {label_type}")
-
-    if sample_count > 0:
-        # 显示标签统计
-        label_counter = Counter(labels)
-        print(f"\nLabel distribution:")
-        for label, count in label_counter.most_common():
-            print(f"  {label}: {count}")
-
-        # 显示标签类型示例
-        print(f"\nSample labels:")
-        for i, (text, label) in enumerate(zip(texts[:5], labels[:5])):
-            print(f"  {i + 1}. '{text}' -> {label}")
-    else:
-        print("ERROR: No valid samples loaded!")
-        print("Please check:")
-        print("1. File format (should be pipe-separated)")
-        print("2. Column count (should be 6)")
-        print("3. Label type selection (Our_label should be column 5)")
-
-    return texts, labels
-
-# -------------------------- 3. 数据预处理与数据集类 --------------------------
-class MRDADataset(Dataset):
-    def __init__(self, texts, labels, tokenizer, max_seq_length, label_encoder):
+# -------------------------- 3. Multi-Label Dataset --------------------------
+class MultiLabelMRDADataset(Dataset):
+    def __init__(self, texts, label_lists, tokenizer, max_seq_length, mlb):
         self.texts = texts
-        self.labels = labels
+        self.multi_labels = mlb.transform(label_lists)  # Convert to one-hot
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
-        self.label_encoder = label_encoder
 
     def __len__(self):
         return len(self.texts)
@@ -158,188 +101,158 @@ class MRDADataset(Dataset):
         text = self.texts[idx]
         encoding = self.tokenizer(
             text,
-            truncation=True,
-            padding="max_length",
-            max_length=self.max_seq_length,
-            return_tensors="pt"
+            truncation = True,
+            padding = "max_length",
+            max_length = self.max_seq_length,
+            return_tensors = "pt"
         )
         input_ids = encoding["input_ids"].squeeze()
         attention_mask = encoding["attention_mask"].squeeze()
-        label = torch.tensor(self.label_encoder.transform([self.labels[idx]])[0], dtype=torch.long)
+        labels = torch.tensor(self.multi_labels[idx], dtype = torch.float32)
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "labels": label
+            "labels": labels
         }
 
-# -------------------------- 4. 模型加载/初始化（核心修复处） --------------------------
-def load_saved_model():
-    try:
-        print(f"Loading saved model from {MODEL_SAVE_DIR}...")
-        label_encoder = joblib.load(LABEL_ENCODER_PATH)
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_SAVE_DIR)
-        model = AutoModelForSequenceClassification.from_pretrained(
-            MODEL_SAVE_DIR,
-            num_labels=len(label_encoder.classes_)
+
+# -------------------------- 4. Multi-Label Model Wrapper --------------------------
+class MultiLabelModel(nn.Module):
+    def __init__(self, model_name, num_labels):
+        super().__init__()
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, num_labels = num_labels
         )
-        model.to(DEVICE)
-        print("Model loaded successfully!")
-        return model, tokenizer, label_encoder
-    except Exception as e:
-        print(f"Failed to load saved model: {e}")
-        print("Will train new model...")
-        return None, None, None
 
-# 【核心修复】修复id2label和label2id的初始化逻辑
-def init_model(label_encoder):
-    """初始化预训练模型，接收label_encoder作为参数（包含标签列表）"""
-    num_labels = len(label_encoder.classes_)
-    # 加载tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_TYPE)
-    # 正确构建id2label和label2id（基于标签编码器的类别列表）
-    id2label = {i: label for i, label in enumerate(label_encoder.classes_)}
-    label2id = {label: i for i, label in enumerate(label_encoder.classes_)}
-    # 加载配置和模型
-    config = AutoConfig.from_pretrained(
-        MODEL_TYPE,
-        num_labels=num_labels,
-        id2label=id2label,
-        label2id=label2id
-    )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_TYPE,
-        config=config
-    )
-    model.to(DEVICE)
-    return model, tokenizer
+    def forward(self, input_ids, attention_mask, labels=None):
+        outputs = self.model(input_ids = input_ids, attention_mask = attention_mask)
+        logits = outputs.logits
 
-# -------------------------- 5. 评估指标函数 --------------------------
-def compute_metrics(eval_pred):
+        if labels is not None:
+            # Use BCEWithLogitsLoss for multi-label classification
+            loss = F.binary_cross_entropy_with_logits(logits, labels)
+            return loss, logits
+
+        return logits
+
+
+# -------------------------- 5. Multi-Label Metrics --------------------------
+def compute_multi_label_metrics(eval_pred):
     logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=-1)
-    accuracy = accuracy_score(labels, predictions)
-    return {"accuracy": accuracy}
+    predictions = (torch.sigmoid(torch.tensor(logits)) > 0.5).int().numpy()
+    f1_micro = f1_score(labels, predictions, average = "micro", zero_division = 0)
+    return {"micro_f1": f1_micro}
 
-# -------------------------- 6. 核心训练/预测逻辑（修复调用处） --------------------------
+
+# -------------------------- 6. Training & Prediction --------------------------
 def main():
-    # 1. 加载数据
-    train_texts, train_labels = load_mrda_data(os.path.join(DATA_DIR, "train_set.txt"), LABEL_TYPE)
-    val_texts, val_labels = load_mrda_data(os.path.join(DATA_DIR, "val_set.txt"), LABEL_TYPE)
-    test_texts, test_labels = load_mrda_data(os.path.join(DATA_DIR, "test_set.txt"), LABEL_TYPE)
+    # Load NEW merged datasets
+    train_texts, train_labels = load_merged_multi_label_data(os.path.join(DATA_DIR, "train_set_merged.txt"))
+    val_texts, val_labels = load_merged_multi_label_data(os.path.join(DATA_DIR, "val_set_merged.txt"))
+    test_texts, test_labels = load_merged_multi_label_data(os.path.join(DATA_DIR, "test_set_merged.txt"))
 
-    # 2. 尝试加载保存的模型
-    model, tokenizer, label_encoder = load_saved_model() if USE_SAVED_MODEL else (None, None, None)
+    # MultiLabelBinarizer for one-hot encoding
+    mlb = MultiLabelBinarizer()
+    mlb.fit(train_labels + val_labels + test_labels)
+    joblib.dump(mlb, MLB_PATH)
+    num_labels = len(mlb.classes_)
+    print(f"Number of DA labels (multi-label): {num_labels}")
+    print(f"Labels: {list(mlb.classes_)}")
 
-    # 3. 训练新模型
-    if model is None or tokenizer is None:
-        # 先初始化标签编码器（全局拟合，避免数据泄露）
-        label_encoder = LabelEncoder()
-        label_encoder.fit(train_labels + val_labels + test_labels)
-        # 【核心修复】传入label_encoder，而非num_labels
-        model, tokenizer = init_model(label_encoder)
-        # 保存标签编码器
-        joblib.dump(label_encoder, LABEL_ENCODER_PATH)
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_TYPE)
 
-        # 创建数据集
-        train_dataset = MRDADataset(train_texts, train_labels, tokenizer, MAX_SEQ_LENGTH, label_encoder)
-        val_dataset = MRDADataset(val_texts, val_labels, tokenizer, MAX_SEQ_LENGTH, label_encoder)
+    # Create datasets
+    train_dataset = MultiLabelMRDADataset(train_texts, train_labels, tokenizer, MAX_SEQ_LENGTH, mlb)
+    val_dataset = MultiLabelMRDADataset(val_texts, val_labels, tokenizer, MAX_SEQ_LENGTH, mlb)
+    test_dataset = MultiLabelMRDADataset(test_texts, test_labels, tokenizer, MAX_SEQ_LENGTH, mlb)
 
-        # 训练配置（GPU环境开启fp16）
-        training_args = TrainingArguments(
-            output_dir=MODEL_SAVE_DIR,
-            num_train_epochs=NUM_EPOCHS,
-            per_device_train_batch_size=TRAIN_BATCH_SIZE,
-            per_device_eval_batch_size=EVAL_BATCH_SIZE,
-            learning_rate=LEARNING_RATE,
-            warmup_ratio=WARMUP_RATIO,
-            weight_decay=WEIGHT_DECAY,
-            logging_dir=os.path.join(MODEL_SAVE_DIR, "logs"),
-            logging_steps=100,
-            evaluation_strategy="epoch",
-            save_strategy="epoch",
-            load_best_model_at_end=True,
-            metric_for_best_model="accuracy",
-            greater_is_better=True,
-            fp16=torch.cuda.is_available(),  # GPU时启用混合精度加速
-            seed=SEED,
-            disable_tqdm=False,
-            report_to="none",
-            # GPU训练加速：启用多线程数据加载
-            dataloader_num_workers=4
-        )
+    # Initialize multi-label model
+    model = MultiLabelModel(MODEL_TYPE, num_labels)
+    model.to(DEVICE)
 
-        # 初始化Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=val_dataset,
-            compute_metrics=compute_metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=EARLY_STOPPING_PATIENCE)]
-        )
+    # Training args
+    training_args = TrainingArguments(
+        output_dir = MODEL_SAVE_DIR,
+        num_train_epochs = NUM_EPOCHS,
+        per_device_train_batch_size = TRAIN_BATCH_SIZE,
+        per_device_eval_batch_size = EVAL_BATCH_SIZE,
+        learning_rate = LEARNING_RATE,
+        warmup_ratio = WARMUP_RATIO,
+        weight_decay = WEIGHT_DECAY,
+        logging_steps = 100,
+        evaluation_strategy = "epoch",
+        save_strategy = "epoch",
+        load_best_model_at_end = True,
+        metric_for_best_model = "micro_f1",
+        greater_is_better = True,
+        fp16 = torch.cuda.is_available(),
+        seed = SEED,
+        report_to = "none",
+        dataloader_num_workers = 2
+    )
 
-        # 开始训练
-        print("\nStarting model training...")
-        start_time = time.time()
-        trainer.train()
-        train_time = time.time() - start_time
-        print(f"Training completed (Time: {train_time:.2f}s)")
+    # Trainer
+    trainer = Trainer(
+        model = model,
+        args = training_args,
+        train_dataset = train_dataset,
+        eval_dataset = val_dataset,
+        compute_metrics = compute_multi_label_metrics,
+        callbacks = [EarlyStoppingCallback(early_stopping_patience = EARLY_STOPPING_PATIENCE)]
+    )
 
-        # 保存模型和tokenizer
-        print(f"\nSaving model to {MODEL_SAVE_DIR}...")
-        trainer.save_model(MODEL_SAVE_DIR)
-        tokenizer.save_pretrained(MODEL_SAVE_DIR)
-        print("Model saved successfully!")
+    # Train
+    print("\nStarting multi-label DA training...")
+    trainer.train()
 
-    # 4. 模型评估
-    print("\nStarting test set evaluation...")
-    start_time = time.time()
-    test_dataset = MRDADataset(test_texts, test_labels, tokenizer, MAX_SEQ_LENGTH, label_encoder)
-    trainer = Trainer(model=model)
-    test_predictions = trainer.predict(test_dataset)
-    test_preds = np.argmax(test_predictions.predictions, axis=-1)
-    test_true = label_encoder.transform(test_labels)
+    # Save
+    model.model.save_pretrained(MODEL_SAVE_DIR)
+    tokenizer.save_pretrained(MODEL_SAVE_DIR)
+    print("Model saved.")
 
-    # 解码标签并生成报告
-    test_preds_labels = label_encoder.inverse_transform(test_preds)
-    test_true_labels = label_encoder.inverse_transform(test_true)
+    # ---------------- Evaluation ----------------
+    print("\nEvaluating on test set...")
+    test_pred = trainer.predict(test_dataset)
+    logits = test_pred.predictions
+    predictions = (torch.sigmoid(torch.tensor(logits)) > 0.5).int().numpy()
+    true_labels = mlb.transform(test_labels)
 
-    eval_time = time.time() - start_time
-    print(f"\n===== Test Set Evaluation Results (Time: {eval_time:.2f}s) =====")
-    print(f"Overall Accuracy: {accuracy_score(test_true_labels, test_preds_labels):.4f}")
-    print("\nClassification Report:")
-    print(classification_report(test_true_labels, test_preds_labels, zero_division=0))
+    print("\n===== Multi-Label Test Results =====")
+    print("Classification Report:")
+    print(classification_report(true_labels, predictions, target_names = mlb.classes_, zero_division = 0))
 
-    # 5. 预测函数
-    def predict_dialogue_act(text):
+    # ---------------- Multi-Label Prediction Function ----------------
+    def predict_multi_da(text):
         encoding = tokenizer(
-            text,
-            truncation=True,
-            padding="max_length",
-            max_length=MAX_SEQ_LENGTH,
-            return_tensors="pt"
-        )
-        input_ids = encoding["input_ids"].to(DEVICE)
-        attention_mask = encoding["attention_mask"].to(DEVICE)
+            text, truncation = True, padding = "max_length",
+            max_length = MAX_SEQ_LENGTH, return_tensors = "pt"
+        ).to(DEVICE)
 
         model.eval()
         with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            pred_id = torch.argmax(outputs.logits, dim=-1).cpu().numpy()[0]
+            logits = model(**encoding)
 
-        return label_encoder.inverse_transform([pred_id])[0]
+        probs = torch.sigmoid(logits).cpu().numpy()[0]
+        pred_indices = np.where(probs > 0.5)[0]
+        if len(pred_indices) == 0:
+            pred_indices = [np.argmax(probs)]
+        return mlb.classes_[pred_indices].tolist()
 
-    # 示例预测
-    test_utterances = [
-        "Can you share the project docs?",
-        "The deadline is tomorrow.",
-        "Let's move to the next topic."
+    # Demo
+    print("\n===== Multi-Label Prediction Examples =====")
+    test_texts_demo = [
+        "Can you share the project documents and deadline?",
+        "I think we should finish this today and I agree with the plan",
+        "I don't accept this and please send me the update"
     ]
-    print("\n===== Example Predictions =====")
-    for utterance in test_utterances:
-        predicted_label = predict_dialogue_act(utterance)
-        print(f"Utterance: {utterance}\nPredicted DA Label: {predicted_label}\n")
+
+    for t in test_texts_demo:
+        preds = predict_multi_da(t)
+        print(f"Text: {t}")
+        print(f"Predicted DA labels: {preds}\n")
+
 
 if __name__ == "__main__":
     main()
