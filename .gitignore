@@ -17,6 +17,7 @@ data/MRDA/*.txt
 *.csv
 *.json
 *.pkl
+*.xlsx
 
 data/MRDA/backup/*.txt
 
