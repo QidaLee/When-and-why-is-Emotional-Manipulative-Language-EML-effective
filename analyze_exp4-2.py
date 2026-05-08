@@ -10,10 +10,19 @@ plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 plt.style.use('seaborn-v0_8-whitegrid')
 
+# ===================== 【核心开关：在这里切换模式】 =====================
+# 可选："single"（单标签 DA_label） 或 "multi"（多标签 Multi_DA_Labels）
+DA_MODE = "single"  # <--- 改这里就行！
+
 # ===================== 配置 =====================
 VALID_PR_LABELS = ['Compliance', 'Resistance']
-DA_COLUMN = 'DA_label'
 TURN_GAP_THRESHOLD = 3
+
+# 根据模式自动选择列名
+if DA_MODE == "single":
+    DA_COLUMN = "DA_label"        # 原来的单标签列
+elif DA_MODE == "multi":
+    DA_COLUMN = "Multi_DA_Labels" # 现在的多标签列
 
 # ===================== 1. 加载数据 =====================
 df = pd.read_excel('output_data/all_turns_data_with_EML_DA_PR.xlsx')
@@ -25,7 +34,7 @@ df = df.sort_values(['Dialogue_ID', 'Turn']).reset_index(drop=True)
 pr_valid = df[df['PR_label'].isin(VALID_PR_LABELS)].copy()
 pr_valid = pr_valid.sort_values(['Dialogue_ID', 'Turn']).reset_index(drop=True)
 
-# ===================== 2. 核心 PR 转移逻辑（已更新：按【之间是否有EML】分组） =====================
+# ===================== 2. 核心 PR 转移逻辑（自动适配单/多标签） =====================
 transitions = []
 
 for dia_id, dia_df in pr_valid.groupby('Dialogue_ID'):
@@ -54,19 +63,27 @@ for dia_id, dia_df in pr_valid.groupby('Dialogue_ID'):
         if between_df.empty:
             continue
 
-        # ===================== 关键修改：两个PR之间是否有 EML =====================
+        # 之间是否有 EML
         has_eml_between = (between_df['EML_label'] == 1).any()
         eml_group = 'With_EML' if has_eml_between else 'Without_EML'
 
         # 取紧邻前一句 DA
         last_row = between_df.iloc[-1]
-        da_before = last_row[DA_COLUMN]
+        da_text = str(last_row[DA_COLUMN]).strip()
 
-        transitions.append({
-            'EML_Between': eml_group,  # 现在是：之间有/无EML
-            'DA_Type': da_before,
-            'PR_Transition': f"{prev_pr['PR_label']}→{next_pr['PR_label']}"
-        })
+        # ============== 自动处理：单标签 / 多标签 ==============
+        if DA_MODE == "single":
+            da_list = [da_text]  # 单标签：直接用原值
+        else:
+            da_list = [d.strip() for d in da_text.split(',') if d.strip()]  # 多标签：拆分
+
+        # 写入转移记录
+        for da in da_list:
+            transitions.append({
+                'EML_Between': eml_group,
+                'DA_Type': da,
+                'PR_Transition': f"{prev_pr['PR_label']}→{next_pr['PR_label']}"
+            })
 
 trans_df = pd.DataFrame(transitions).dropna(subset=['DA_Type'])
 
@@ -77,6 +94,8 @@ trans_types = ['Compliance→Compliance', 'Compliance→Resistance',
 
 for eml in ['With_EML', 'Without_EML']:
     group = trans_df[trans_df['EML_Between'] == eml]
+    if group.empty:
+        continue
     for da in group['DA_Type'].unique():
         da_sub = group[group['DA_Type'] == da]
         total = len(da_sub)
@@ -97,21 +116,23 @@ for eml in ['With_EML', 'Without_EML']:
 result_df = pd.DataFrame(result_rows)
 result_df = result_df.sort_values(['EML_Between', 'DA_Type', 'PR_Transition'])
 
-# ===================== 4. 两张热力图：With EML / Without EML =====================
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+# ===================== 4. 两张热力图 =====================
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
 
-# --- 左图：With EML between PRs ---
+# --- 左图：With EML ---
 df_yes = trans_df[trans_df['EML_Between'] == 'With_EML']
-pivot_yes = pd.crosstab(df_yes['PR_Transition'], df_yes['DA_Type'], normalize='index') * 100
-sns.heatmap(pivot_yes, annot=True, fmt='.1f', cmap='Oranges', ax=ax1, annot_kws={"size": 11})
+if not df_yes.empty:
+    pivot_yes = pd.crosstab(df_yes['PR_Transition'], df_yes['DA_Type'], normalize='index') * 100
+    sns.heatmap(pivot_yes, annot=True, fmt='.1f', cmap='Oranges', ax=ax1, annot_kws={"size": 10})
 ax1.set_title('DA Before PR Transition (With EML Between PRs)', fontsize=14, pad=15)
 ax1.set_xlabel('DA Type')
 ax1.set_ylabel('PR Transition')
 
-# --- 右图：Without EML between PRs ---
+# --- 右图：Without EML ---
 df_no = trans_df[trans_df['EML_Between'] == 'Without_EML']
-pivot_no = pd.crosstab(df_no['PR_Transition'], df_no['DA_Type'], normalize='index') * 100
-sns.heatmap(pivot_no, annot=True, fmt='.1f', cmap='Blues', ax=ax2, annot_kws={"size": 11})
+if not df_no.empty:
+    pivot_no = pd.crosstab(df_no['PR_Transition'], df_no['DA_Type'], normalize='index') * 100
+    sns.heatmap(pivot_no, annot=True, fmt='.1f', cmap='Blues', ax=ax2, annot_kws={"size": 10})
 ax2.set_title('DA Before PR Transition (Without EML Between PRs)', fontsize=14, pad=15)
 ax2.set_xlabel('DA Type')
 ax2.set_ylabel('PR Transition')
@@ -121,6 +142,8 @@ plt.savefig('DA_Before_PR_Transition_2Heatmaps.png', dpi=300, bbox_inches='tight
 plt.show()
 
 # ===================== 输出 =====================
+print("=" * 120)
+print(f"✅ 当前模式：{'【多标签 Multi_DA_Labels】' if DA_MODE=='multi' else '【单标签 DA_label】'}")
 print("=" * 120)
 print("    EML_Between | DA_Type | PR_Transition | Count | DA_Total | Probability    ")
 print("=" * 120)
