@@ -41,7 +41,7 @@ print("=" * 80)
 print("              EML & DA Association Analysis (Chi-Square Test)")
 print("=" * 80)
 print(f"Chi-square statistic = {chi2:.2f}")
-print(f"P-value              = {p_val:.4f}")
+print(f"P-value              = {p_val:.12f}")
 print(f"Degrees of freedom    = {dof}")
 
 if p_val < 0.05:
