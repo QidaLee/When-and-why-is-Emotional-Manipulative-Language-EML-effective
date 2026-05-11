@@ -6,7 +6,7 @@ import warnings
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 import joblib
 from tqdm import tqdm
-from sklearn.metrics import f1_score, classification_report, cohen_kappa_score
+from sklearn.metrics import f1_score, classification_report, cohen_kappa_score, accuracy_score
 from sklearn.preprocessing import MultiLabelBinarizer
 
 warnings.filterwarnings('ignore')
@@ -115,6 +115,9 @@ def evaluate_multi_label(true_labels, pred_labels, mlb):
     y_true = mlb.transform(true_labels)
     y_pred = mlb.transform(pred_labels)
 
+    # Exact match accuracy (all labels must match exactly)
+    exact_match_accuracy = accuracy_score(y_true, y_pred)
+
     micro_f1 = f1_score(y_true, y_pred, average = "micro", zero_division = 0)
     macro_f1 = f1_score(y_true, y_pred, average = "macro", zero_division = 0)
 
@@ -123,6 +126,7 @@ def evaluate_multi_label(true_labels, pred_labels, mlb):
     print("\n" + "=" * 70)
     print("FINAL VALIDATION RESULTS (MODEL vs HUMAN)")
     print("=" * 70)
+    print(f"Exact Match Accuracy:   {exact_match_accuracy:.4f}")
     print(f"Micro F1:              {micro_f1:.4f}")
     print(f"Macro F1:              {macro_f1:.4f}")
     print(f"Label-wise Accuracy:   {agree['label_accuracy']:.4f}")
@@ -135,6 +139,7 @@ def evaluate_multi_label(true_labels, pred_labels, mlb):
     print(classification_report(y_true, y_pred, target_names = mlb.classes_, zero_division = 0))
 
     metrics_df = pd.DataFrame([{
+        "exact_match_accuracy": exact_match_accuracy,
         "micro_f1": micro_f1,
         "macro_f1": macro_f1,
         "label_accuracy": agree["label_accuracy"],
