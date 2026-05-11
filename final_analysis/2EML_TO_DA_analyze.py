@@ -68,3 +68,95 @@ print(f"Chi-Square Statistic:  {chi2:.4f}")
 print(f"p-value:               {p_value:.6f}")
 sig = "significant" if p_value < 0.05 else "not significant"
 print(f"\n→ Association is {sig} (p {'<' if p_value < 0.05 else '>='} 0.05)")
+
+# ==================== NEW: Merged Table with All DA Categories ====================
+
+print("\n" + "=" * 80)
+print("=== Merged Analysis Table for ALL Original DA Categories ===")
+print("=" * 80)
+
+
+# Get all possible DA labels (accounting for comma-separated multi-labels)
+def expand_da_labels(df, col="DA_label"):
+    """Expand comma-separated multi-labels into individual labels"""
+    all_labels = []
+    for val in df[col].dropna():
+        labels = [d.strip() for d in str(val).split(",")]
+        all_labels.extend(labels)
+    return sorted(set(all_labels))
+
+
+# Get all unique DA categories
+all_da_categories = expand_da_labels(df_valid)
+
+# Store results for each category
+results_data = []
+
+for da_cat in all_da_categories:
+    # Calculate P(DA = da_cat | EML = 0)
+    subset_em0 = df_valid[df_valid["prev_EML"] == 0]
+    total_em0 = len(subset_em0)
+    if total_em0 > 0:
+        count_em0 = sum(da_cat in [d.strip() for d in str(row).split(",")]
+                        for row in subset_em0["DA_label"])
+        prob_em0 = count_em0 / total_em0
+    else:
+        prob_em0 = 0.0
+        count_em0 = 0
+
+    # Calculate P(DA = da_cat | EML = 1)
+    subset_em1 = df_valid[df_valid["prev_EML"] == 1]
+    total_em1 = len(subset_em1)
+    if total_em1 > 0:
+        count_em1 = sum(da_cat in [d.strip() for d in str(row).split(",")]
+                        for row in subset_em1["DA_label"])
+        prob_em1 = count_em1 / total_em1
+    else:
+        prob_em1 = 0.0
+        count_em1 = 0
+
+    # Chi-square test for this DA category
+    df_valid[f"has_{da_cat}"] = df_valid["DA_label"].apply(
+        lambda x: da_cat in [d.strip() for d in str(x).split(",")] if pd.notna(x) else False
+    )
+
+    contingency = pd.crosstab(df_valid["prev_EML"], df_valid[f"has_{da_cat}"])
+
+    # Calculate p-value if contingency table is 2x2 with sufficient data
+    if contingency.shape == (2, 2) and contingency.min().min() > 0:
+        chi2, p_value, dof, expected = chi2_contingency(contingency)
+        p_val_display = f"{p_value:.6f}"
+        significant = "*" if p_value < 0.05 else ""
+    else:
+        p_value = np.nan
+        p_val_display = "N/A"
+        significant = ""
+
+    results_data.append({
+        "DA": da_cat,
+        "P(DA|EML=0)": prob_em0,
+        "P(DA|EML=1)": prob_em1,
+        "Count(EML=0)": count_em0,
+        "Count(EML=1)": count_em1,
+        "p-value": p_val_display,
+        "sig": significant
+    })
+
+# Create DataFrame for better display
+results_df = pd.DataFrame(results_data)
+
+# Display merged table
+print("\n" + results_df.to_string(index = False))
+print("\nNote: * indicates p < 0.05 (statistically significant)")
+
+# Optional: Save to CSV
+# results_df.to_csv("da_analysis_results.csv", index=False)
+# print("\nResults saved to 'da_analysis_results.csv'")
+
+# Summary of significant categories
+sig_df = results_df[results_df["sig"] == "*"]
+if len(sig_df) > 0:
+    print(f"\n=== Summary: {len(sig_df)} DA categories significantly associated with previous EML (p < 0.05) ===")
+    print(sig_df[["DA", "P(DA|EML=0)", "P(DA|EML=1)", "p-value"]].to_string(index = False))
+else:
+    print("\nNo DA categories showed significant association with previous EML (p < 0.05)")
